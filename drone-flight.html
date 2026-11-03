@@ -1,0 +1,1636 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Drone Lab: flight</title>
+<style>
+  :root{--paper:#f2efe7;--ink:#231e16;--muted:#857d6e;--acc:#f4b829}
+  *{box-sizing:border-box} html,body{margin:0;height:100%;overflow:hidden;background:var(--paper);color:var(--ink);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}
+  #cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  #bar{position:fixed;top:8px;left:8px;right:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;z-index:3;pointer-events:none}
+  #bar > *{pointer-events:auto}
+  #bar h1{font-size:12px;letter-spacing:.06em;margin:0 6px 0 2px;text-transform:uppercase;background:var(--paper);padding:3px 8px;border-radius:6px}
+  .b,select{font:inherit;font-size:12px;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:4px 12px;cursor:pointer;box-shadow:2px 2px 0 var(--ink)}
+  select{padding:4px 8px;border-radius:8px;appearance:none}
+  .b[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+  .b:active{transform:translate(1px,1px);box-shadow:1px 1px 0 var(--ink)}
+  .sp{flex:1}
+  .card{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,calc(100vw - 32px));max-height:calc(100vh - 80px);overflow:auto;
+    background:#fbf7ea;border:2px solid var(--ink);border-radius:14px;box-shadow:4px 4px 0 var(--ink);padding:16px 18px}
+  .card[hidden]{display:none}
+  .card h2{margin:0 0 8px;font-size:13px;letter-spacing:.1em;text-transform:uppercase}
+  .card h3{margin:14px 0 6px;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .card p,.card li{font-size:12.5px;line-height:1.5;margin:4px 0}
+  .card ul{padding-left:18px;margin:4px 0}
+  .card kbd{border:1px solid var(--ink);border-bottom-width:2px;border-radius:4px;padding:0 4px;font:inherit;font-size:11.5px;background:#fff}
+  .card .x{position:absolute;right:12px;top:10px}
+  .grid{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center}
+  .grid label{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .grid input[type=range]{width:100%;accent-color:var(--ink)}
+  .grid output{min-width:52px;text-align:right;font-weight:700}
+  .axes{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
+  .axes div{font-size:11px;border:1px solid var(--rule,#ddd6c8);border-radius:6px;padding:3px 5px;position:relative;overflow:hidden}
+  .axes i{position:absolute;left:50%;top:0;bottom:0;background:var(--acc);opacity:.6}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0}
+  @media (max-width:640px){#bar h1{display:none}.b,select{font-size:11px;padding:3px 9px}}
+</style>
+</head><body>
+<canvas id="cv"></canvas>
+<div id="bar">
+  <h1>Drone Lab</h1>
+  <select id="selDrone" aria-label="Drone"></select>
+  <select id="selEnv" aria-label="Environment"></select>
+  <button class="b" id="bView">View: Chase</button>
+  <button class="b" id="bMode">Mode: Acro</button>
+  <button class="b" id="bArm">Arm</button>
+  <button class="b" id="bReset">Reset</button>
+  <span class="sp"></span>
+  <button class="b" id="bHow">How it flies</button>
+  <button class="b" id="bSet">Settings</button>
+  <button class="b" id="bHelp">Controls</button>
+  <a class="b" id="bBuild" href="#" style="text-decoration:none">Build</a>
+  <a class="b" href="drone-lab.html" style="text-decoration:none">All drones</a>
+</div>
+
+<div class="card" id="help" hidden>
+  <button class="b x" data-close>Close</button>
+  <h2>Flying controls</h2>
+  <p>The two sticks work exactly like a real radio in <b>Mode 2</b>: the left stick is throttle (up/down) and yaw (left/right); the right stick is pitch (up/down) and roll (left/right).</p>
+  <h3>Radio transmitter or gamepad (best)</h3>
+  <p>Plug a radio (EdgeTX/OpenTX in USB Joystick mode) or a gamepad in and move a stick. Radios are detected as AETR (roll, pitch, throttle, yaw) with the arm switch on channel 5; check or change the mapping in Settings. Practising on your real radio is what makes the skill transfer.</p>
+  <h3>Touch / mouse</h3>
+  <p>Drag the two stick pads in the bottom corners. In Acro and Angle the throttle stays where you leave it, like a real radio; in GPS modes it springs back to the middle (hold height).</p>
+  <h3>Keyboard</h3>
+  <ul>
+    <li><kbd>W</kbd>/<kbd>S</kbd> throttle (stays put in Acro/Angle) &nbsp; <kbd>A</kbd>/<kbd>D</kbd> yaw</li>
+    <li><kbd>&uarr;</kbd>/<kbd>&darr;</kbd> pitch &nbsp; <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> roll &nbsp; (or <kbd>I</kbd><kbd>K</kbd><kbd>J</kbd><kbd>L</kbd>)</li>
+    <li><kbd>Enter</kbd> arm / disarm &nbsp; <kbd>R</kbd> reset (fresh battery) &nbsp; <kbd>V</kbd> camera view &nbsp; <kbd>M</kbd> flight mode &nbsp; <kbd>P</kbd> pause</li>
+  </ul>
+  <h3>Flight modes</h3>
+  <ul>
+    <li><b>Acro (rate)</b>: what FPV pilots fly. The sticks set how fast it rotates; centre the stick and it holds whatever angle it is at. Nothing levels it for you.</li>
+    <li><b>Angle</b>: the sticks set the tilt angle and it levels itself when you let go. A good first step.</li>
+    <li><b>GPS / Sport / Cine</b>: camera drones. Sticks set speed; let go and it brakes and holds its spot and height.</li>
+  </ul>
+  <h3>Like the real thing</h3>
+  <p>To arm, the throttle must be at the bottom and the drone level (Betaflight refuses otherwise). Props spin at idle once armed. Crashes happen above a real impact speed; R puts on a fresh battery.</p>
+</div>
+
+<div class="card" id="how" hidden>
+  <button class="b x" data-close>Close</button>
+  <h2>How it stays in the air</h2>
+  <p><b>Thrust.</b> Each prop pushes air down and the drone up. When the total thrust equals the weight it hovers; more and it climbs. The throttle stick sets this total.</p>
+  <p><b>Differential thrust.</b> To tilt, the flight controller makes some motors push harder than others. Rear motors faster: the nose dips and the drone flies forward. Left motors faster: it rolls right. The drone moves by leaning its thrust, like a helicopter.</p>
+  <p><b>Torque cancellation.</b> Spinning a prop twists the frame the opposite way. Half the props spin clockwise and half counter-clockwise, so at a hover the twists cancel. To yaw, the FC speeds up one set and slows the other: total thrust stays the same but the twists no longer cancel, so the frame turns.</p>
+  <p><b>Mixing.</b> Every motor gets: throttle + pitch share + roll share + yaw share. The panel at the bottom shows it live: each circle is a motor, its fill is how hard it is working, its ring colour is its spin direction (red clockwise, blue counter-clockwise from above).</p>
+  <p><b>The gyro loop.</b> The flight controller measures rotation thousands of times a second and keeps correcting the motors (the PID loop). Motors cannot change speed instantly: big props on a heavy drone react slowly, a 5-inch reacts in hundredths of a second. You feel that difference here.</p>
+</div>
+
+<div class="card" id="set" hidden>
+  <button class="b x" data-close>Close</button>
+  <h2>Settings</h2>
+  <h3>Rates (roll &amp; pitch), Betaflight "Actual" style</h3>
+  <div class="grid">
+    <label for="rC">Centre sensitivity</label><input id="rC" type="range" min="50" max="400" step="10"><output id="oC"></output>
+    <label for="rM">Max rate</label><input id="rM" type="range" min="100" max="1200" step="10"><output id="oM"></output>
+    <label for="rE">Expo</label><input id="rE" type="range" min="0" max="0.95" step="0.01"><output id="oE"></output>
+    <label for="rY">Yaw max rate</label><input id="rY" type="range" min="60" max="1000" step="10"><output id="oY"></output>
+  </div>
+  <h3>Camera &amp; world</h3>
+  <div class="grid">
+    <label for="rU">FPV camera uptilt</label><input id="rU" type="range" min="-40" max="60" step="1"><output id="oU"></output>
+    <label for="rF">FPV field of view</label><input id="rF" type="range" min="70" max="140" step="1"><output id="oF"></output>
+    <label for="sW">Wind</label><select id="sW"><option value="0">Calm</option><option value="1">Light breeze</option><option value="2">Gusty</option></select><span></span>
+    <label for="sS">Stick mode</label><select id="sS"><option value="2">Mode 2 (throttle left)</option><option value="1">Mode 1 (throttle right)</option></select><span></span>
+    <label for="cA">Motor sound</label><input id="cA" type="checkbox" style="justify-self:start"><span></span>
+  </div>
+  <h3>Controller mapping <span id="gpName" style="text-transform:none;letter-spacing:0"></span></h3>
+  <div class="grid" id="mapGrid"></div>
+  <div class="axes" id="axes"></div>
+  <div class="row"><button class="b" id="bDefaults">Reset rates for this drone</button></div>
+</div>
+
+<script>
+/* ============================================================
+   Colorfigures core: projection, shapes, shading, ink, labels, page shell.
+   A figure page includes this file (scripts/build.py inlines it), then calls mountFigure({...}).
+   See SKILL.md for the drawing contract and conventions.
+   One fixed view (front-left-top) and one fixed light (from above, behind the viewer's right shoulder: the front is lit,
+   the left side is in shade, and cast shadows fall toward the lower left of the screen).
+   ============================================================ */
+
+/* ---------- palettes ---------- */
+const PALS = {
+  mustard: { l:'#f4b829', m:'#d49c1f', d:'#4e4a18' },
+  tomato:  { l:'#ef6a4c', m:'#cf5038', d:'#4a2219' },
+  mint:    { l:'#93d3b0', m:'#71b693', d:'#1f4034' },
+  cobalt:  { l:'#76a0e2', m:'#5a82c6', d:'#1c2948' },
+  blush:   { l:'#f3a6bb', m:'#d8869c', d:'#4b2430' },
+};
+const METAL   = { l:'#eef0f0', m:'#c6ccce', d:'#8f989b' };
+const CLEAR   = { l:'#e4f2f4', m:'#c4dfe4', d:'#97b9c0' };
+const CERAMIC = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
+const DARK    = { l:'#55504a', m:'#3d3935', d:'#272421' };
+const INK = '#231e16';
+const SHADOW = '#41538f';
+
+/* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
+const C = Math.cos(Math.PI/6), S = Math.sin(Math.PI/6);
+let OX = 0, OY = 0;
+/* Free orthographic camera (internal names start with CAM_ / cam so they never clash with a figure's own names). YAW turns the viewer around the vertical axis (45° = the classic front-left view),
+   PITCH is how far it looks down (35.26° = true isometric). At the defaults P() is exactly the old isometric
+   projection, so every figure drawn for it still lines up. Drag the figure to orbit; double-click to reset.
+   rotV(n) maps a world direction into the default view's frame, so vis / tone / any "sum of rotV > 0" test keep
+   working at every angle: the viewer is always (1,1,1) and the light stays put relative to the viewer. */
+let VIEW = 0, RC = [0, 0], RCZ = 0;
+const VIEW_NAMES = ['front', 'left side', 'back', 'right side'];
+const TURNS = [0, 2];
+const YAW0 = 45, PITCH0 = Math.atan(1/Math.SQRT2) * 180/Math.PI, CAM_K = Math.sqrt(1.5);
+let YAW = YAW0, PITCH = PITCH0, CAM_R, CAM_U, CAM_V, CAM_D;                       // right, up, toward viewer, screen-down
+const camBasis = (yaw, pitch) => { const t = yaw*Math.PI/180, p = pitch*Math.PI/180, ct = Math.cos(t), st = Math.sin(t), cp = Math.cos(p), sp2 = Math.sin(p);
+  return { R:[st,-ct,0], U:[-sp2*ct,-sp2*st,cp], V:[cp*ct,cp*st,sp2] }; };
+const CAM_B0 = camBasis(YAW0, PITCH0);
+// CAM_LIM: how far (deg) the camera may turn either side of the front view; null = all the way round (set per figure)
+let CAM_LIM = null;
+function setCam(yaw, pitch){ YAW = CAM_LIM == null ? yaw : Math.max(YAW0 - CAM_LIM, Math.min(YAW0 + CAM_LIM, yaw));
+  PITCH = CAM_LIM == null ? Math.max(6, Math.min(78, pitch)) : Math.max(15, Math.min(62, pitch)); const b = camBasis(YAW, PITCH); CAM_R = b.R; CAM_U = b.U; CAM_V = b.V; CAM_D = CAM_U.map(v => -v); }
+setCam(YAW0, PITCH0);
+const camDot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const rotV = n => { const r = camDot(n,CAM_R), u = camDot(n,CAM_U), v = camDot(n,CAM_V); return [0,1,2].map(i => CAM_B0.R[i]*r + CAM_B0.U[i]*u + CAM_B0.V[i]*v); };
+// the light's ground direction turns with the viewer's yaw only (shadows always fall toward the lower left of the screen)
+const yawTurn = ([x,y]) => { const t = (YAW - YAW0)*Math.PI/180, c = Math.cos(t), s = Math.sin(t); return [x*c - y*s, x*s + y*c]; };
+const rotXY = (x,y) => [x, y];                                                // kept for old callers
+const P0 = (x,y,z) => [(x-y)*C + OX, (x+y)*S - z + OY];                       // raw iso
+const P  = (x,y,z) => { const q = [x-RC[0], y-RC[1], z-RCZ];
+  return [CAM_K*camDot(q,CAM_R) + (RC[0]-RC[1])*C + OX, CAM_K*camDot(q,CAM_D) + (RC[0]+RC[1])*S - RCZ + OY]; };
+const Dv = (x,y,z) => [CAM_K*camDot([x,y,z],CAM_R), CAM_K*camDot([x,y,z],CAM_D)];
+// distance toward the viewer: draw parts with smaller depth first
+const depthOf = p => camDot(p, CAM_V);
+// sort [{at:[x,y,z], svg}] back-to-front for the current camera. A part may also give box:[[x0,y0,z0],[x1,y1,z1]]:
+// when two boxes are separated along x, y or z, the one on the viewer's side goes last (a centre point alone gets long
+// or wrapping parts wrong: a pole beside a row of keys, a spout reaching past a cup).
+const boxMid = b => [0,1,2].map(k => (b[0][k] + b[1][k]) / 2);
+const sepOrder = (p, q) => { if (!p.box || !q.box) return 0;
+  for (let k = 0; k < 3; k++){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? 1 : -1; }
+  return 0; };
+const byDepth = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box)))).map(p => p.svg).join('');
+// the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
+const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
+// an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
+const openShell = (A, B, colour, contents = '') => loft(A, B, colour, true) + contents + loft(A, B, colour);
+const f  = v => v.toFixed(1);
+const pd = (pts, close=true) => 'M' + pts.map(p => { const q = P(p[0],p[1],p[2]); return f(q[0])+' '+f(q[1]); }).join('L') + (close ? 'Z' : '');
+const sp = pts => 'M' + pts.map(q => f(q[0])+' '+f(q[1])).join('L') + 'Z';
+
+/* ---------- 2D shapes in a plane's (u,v) coords (v up), mapped to 3D by a plane ---------- */
+const arcUV  = (cu,cv,r,a0,a1,n=7) => { const o=[]; for (let i=0;i<=n;i++){ const a=(a0+(a1-a0)*i/n)*Math.PI/180; o.push([cu+r*Math.cos(a), cv+r*Math.sin(a)]); } return o; };
+const rrUV   = (u0,v0,u1,v1,r,n=7) => r <= 0 ? rectUV(u0,v0,u1,v1) : [...arcUV(u1-r,v0+r,r,-90,0,n), ...arcUV(u1-r,v1-r,r,0,90,n), ...arcUV(u0+r,v1-r,r,90,180,n), ...arcUV(u0+r,v0+r,r,180,270,n)];
+const rectUV = (u0,v0,u1,v1) => [[u0,v0],[u1,v0],[u1,v1],[u0,v1]];
+const ellUV  = (cu,cv,ru,rv,n=24) => Array.from({length:n}, (_,i) => { const a=i/n*2*Math.PI; return [cu+ru*Math.cos(a), cv+rv*Math.sin(a)]; });
+const PX = x => ([u,v]) => [x,u,v];      // front-facing plane x = const   (u = y, v = z)
+const PY = y => ([u,v]) => [u,y,v];      // side plane y = const           (u = x, v = z)
+const PZ = z => ([u,v]) => [u,v,z];      // horizontal plane z = const     (u = x, v = y)
+const on = (plane, uv) => uv.map(plane);
+
+/* ---------- vectors + shading ---------- */
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{ const l=Math.hypot(...a)||1; return a.map(v=>v/l); };
+const avg=ps=>ps.reduce((s,p)=>[s[0]+p[0]/ps.length,s[1]+p[1]/ps.length,s[2]+p[2]/ps.length],[0,0,0]);
+const vis = n => { const r = rotV(n); return r[0]+r[1]+r[2] > 1e-6; };   // viewer looks from (+1,+1,+1) after the turn
+const facing = vis;                                                       // readable alias: is this face toward the viewer?
+const SHADOW_K = 0.85, AZ_MIN = 20, AZ_MAX = 160;
+// cast shadows are drawn shorter than the shading light implies (0.45 × height instead of 0.85 ×): long shadows of tall
+// parts on thin supports (a lamp shade, a fan head) land far from the object and read as separate blobs
+const SHADOW_LEN = 0.45;
+let L = [0,0,1], SH = [0,0];
+function setLight(deg){ const a=deg*Math.PI/180; SH=[SHADOW_K*Math.cos(a), SHADOW_K*Math.sin(a)]; L=norm([-SH[0],-SH[1],1]); }
+const LIN = norm([.6,.2,1]);                       // fixed light for interiors / small props
+// Three flat tones, but blended across a narrow band at each step, so a face that turns past a threshold while the
+// figure rotates fades between tones instead of snapping (at rest almost every face still sits on a pure tone).
+const SOFT = .18;
+const step3 = (d, hi, lo, m) => { const ss = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a)/(b - a))); return k*k*(3 - 2*k); };
+  const a = ss(hi - SOFT, hi + SOFT, d), b = ss(lo - SOFT, lo + SOFT, d);
+  return a >= 1 ? m.l : b <= 0 ? m.d : a > 0 ? mix(m.m, m.l, a) : b < 1 ? mix(m.d, m.m, b) : m.m; };
+const tone  = (n,m) => step3(dot(rotV(n),L),   -.15, -.45, m);   // exterior, follows the sun
+const toneI = (n,m) => step3(dot(rotV(n),LIN),  .6,   .05, m);   // interior / props
+const mix = (a,b,t) => '#' + [1,3,5].map(i => Math.round(parseInt(a.substr(i,2),16)*(1-t) + parseInt(b.substr(i,2),16)*t).toString(16).padStart(2,'0')).join('');
+const matOf = hex => ({ l:hex, m:mix(hex,'#000000',.16), d:mix(hex,'#000000',.42) });
+const ease = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+
+/* ---------- drawing primitives (all return SVG strings) ---------- */
+const ink   = (d,w=1.0) => `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`;
+const fill  = (d,c,extra='') => `<path d="${d}" fill="${c}" ${extra}/>`;
+const face  = (d,c) => `<path d="${d}" fill="${c}" stroke="${c}" stroke-width=".7" stroke-linejoin="round"/>`;
+const shape = (pts,c,w=.9) => fill(pd(pts),c) + (w ? ink(pd(pts),w) : '');
+const line  = (pts,w=.9) => ink(pd(pts,false),w);
+// Loft between two rings of equal length (closed). colour(n) picks each strip's fill; flip = seen from inside.
+function loft(A, B, colour, flip=false){
+  const n=A.length, cen=avg(A.concat(B)); let s='';
+  for (let i=0;i<n;i++){
+    const a0=A[i], a1=A[(i+1)%n], b1=B[(i+1)%n], b0=B[i];
+    let nr = norm(cross(sub(a1,a0), sub(b0,a0)));
+    if (!isFinite(nr[0])) continue;
+    if (dot(nr, sub(avg([a0,a1,b1,b0]), cen)) < 0) nr = nr.map(v=>-v);
+    if (flip) nr = nr.map(v=>-v);
+    if (vis(nr)) s += face(pd([a0,a1,b1,b0]), colour(nr));
+  }
+  return s;
+}
+function hull(pts){
+  pts = pts.slice().sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  const cr=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]); const lo=[], up=[];
+  for (const p of pts){ while(lo.length>=2 && cr(lo[lo.length-2],lo[lo.length-1],p)<=0) lo.pop(); lo.push(p); }
+  for (const p of pts.reverse()){ while(up.length>=2 && cr(up[up.length-2],up[up.length-1],p)<=0) up.pop(); up.push(p); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+// Silhouette ink, weighted by how thick the part is on screen (like a hand inker): the w you pass is the most it gets.
+// Thickness = 2 × area / perimeter of the outline (a rod's diameter, about half a box's width), as a share of the
+// frame width. A long thin rod, a handle or a knob stays light (~1–1.5); a grinder, kettle or machine body gets the
+// heavy ~2.4–2.8. Thin parts stay thin and parts keep air between them.
+const hullInk = (pts3, w=1.4) => { const h = hull(pts3.map(p=>P(...p))); let a = 0, per = 0;
+  for (let i = 0; i < h.length; i++){ const p = h[i], q = h[(i+1) % h.length]; a += p[0]*q[1] - q[0]*p[1]; per += Math.hypot(q[0]-p[0], q[1]-p[1]); }
+  const thick = per ? Math.abs(a) / per / (INK_K * INK_REF_VB) : 0;
+  return ink(sp(h), Math.min(w, .9 + 20*thick)); };
+// Axis-aligned box: three visible faces, shaded, each outlined. shade = tone (sunlit) or toneI (interior).
+function box(x0,y0,z0,x1,y1,z1,m,shade=toneI,w=.9){
+  // all six faces, drawn only when they face the viewer (sides first, then top) — correct in every VIEW
+  const F = [
+    [[0,1,0],  [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]],
+    [[1,0,0],  [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]],
+    [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1],  [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]] ];
+  return F.filter(([n]) => vis(n)).map(([n,q]) => shape(q, shade(n,m), w)).join('');
+}
+// Rounded-profile extrusion: profile (u=y, v=z) swept along x from x0 to x1. Body of most machines.
+function extrude(profileUV, x0, x1, m, shade=tone){ return loft(on(PX(x0),profileUV), on(PX(x1),profileUV), n=>shade(n,m)); }
+// Vertical cylinder (axis z) centred (x,y), radius r from z0 to z1, with top cap.
+function cyl(x,y,z0,z1,r,m,shade=toneI,w=1.2,n=24){
+  const A=on(PZ(z0),ellUV(x,y,r,r,n)), B=on(PZ(z1),ellUV(x,y,r,r,n));
+  return loft(A,B,nr=>shade(nr,m)) + fill(pd(B),shade([0,0,1],m)) + hullInk([...A,...B],w) + ink(pd(B),w*.8);
+}
+// Cylinder lying along x (e.g. a knob or dial sticking out of a front face): centred (y,z), from x0 to x1.
+function cylX(x0,x1,y,z,r,m,shade=toneI,w=1.1,n=20){
+  const A=on(PX(x0),ellUV(y,z,r,r,n)), B=on(PX(x1),ellUV(y,z,r,r,n));
+  // cap on whichever end faces the viewer (the +x end in VIEW 0)
+  const capB = vis([1,0,0]), cap = capB ? B : A, cn = capB ? [1,0,0] : [-1,0,0];
+  return loft(A,B,nr=>shade(nr,m)) + (vis(cn) ? fill(pd(cap),shade(cn,m)) : '') + hullInk([...A,...B],w) + (vis(cn) ? ink(pd(cap),w*.8) : '');
+}
+// Cylinder between any two 3D points a and b (a lamp arm, a rod, a pipe at an angle, a handle bar), radius r.
+// The end facing the viewer gets a cap. For a tapered part (a cone, a lamp shade) pass r1 for the radius at b.
+function rod(a, b, r, m, shade=toneI, w=1, r1=r, n=16){
+  const d = norm(sub(b, a)), u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u);
+  const ring = (p, rr) => Array.from({length:n}, (_,i) => { const t = i/n*2*Math.PI, c = Math.cos(t)*rr, s2 = Math.sin(t)*rr;
+    return [p[0] + u[0]*c + v[0]*s2, p[1] + u[1]*c + v[1]*s2, p[2] + u[2]*c + v[2]*s2]; });
+  const A = ring(a, r), B = ring(b, r1), capB = vis(d), cap = capB ? B : A, cn = capB ? d : d.map(x => -x);
+  return loft(A, B, nr => shade(nr, m)) + (Math.max(r, r1) > 0 ? fill(pd(cap), shade(cn, m)) + ink(pd(cap), w*.8) : '') + hullInk([...A, ...B], w);
+}
+// Text lying flat on a front plane x = const, centred at (y,z) baseline; reads left-to-right on screen.
+// text sits on a face: if its reading direction comes out mirrored (or edge-on), that face is turned away, so the text is hidden
+const txM = (o, U, V) => (U[0]*V[1] - U[1]*V[0]) <= .02 * Math.hypot(...U) * Math.hypot(...V) ? `matrix(0 0 0 0 ${f(o[0])} ${f(o[1])})` : `matrix(${U[0].toFixed(4)} ${U[1].toFixed(4)} ${V[0].toFixed(4)} ${V[1].toFixed(4)} ${f(o[0])} ${f(o[1])})`;
+const tx = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(0,-1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Text on a side plane y = const, centred at (x,z).
+const txY = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Cast shadow of a set of 3D points (any outline of the object), pushed along the light onto z = 0.
+// the light stays put relative to the viewer, so the shadow is cast in turned coordinates
+// z0: the surface it falls on (a board, a counter); clip it to that surface with clipTo(...) if it could spill off.
+// clip: the 3D outline of the surface it falls on (e.g. boardTop(...)), so it can't spill over the edge.
+const castShadow = (pts3, z0=0, clip=null) => { const k = SHADOW_LEN / SHADOW_K, [sx, sy] = yawTurn(SH);
+  const s = fill(sp(hull(pts3.map(([x,y,z]) => P(x+(z-z0)*sx*k, y+(z-z0)*sy*k, z0)))), SHADOW);
+  return clip ? clipTo(clip, s) : s; };
+// A board for the object to stand on (a tray, a desk top, a counter): a rounded slab from (x0,y0) to (x1,y1), h thick.
+// Draw it first; then castShadow(points, h, boardTop(x0,y0,x1,y1,h,r)) so shadows lie on it and stop at its edge.
+const BOARD = { l:'#e6e1d4', m:'#cfc8b8', d:'#aaa293' }, WOOD = { l:'#d9a86c', m:'#bf8a4f', d:'#8e6236' };
+const boardTop = (x0,y0,x1,y1,h=3,r=5) => on(PZ(h), rrUV(x0,y0,x1,y1,r));
+function board(x0,y0,x1,y1,h=3,r=5,m=BOARD){
+  const A = on(PZ(0), rrUV(x0,y0,x1,y1,r)), B = boardTop(x0,y0,x1,y1,h,r);
+  return loft(A, B, n => toneI(n, m)) + fill(pd(B), m.l) + ink(pd(B), 1) + hullInk([...A, ...B], 1.8);
+}
+// Group helpers: clickable target, clip to an opening.
+const act  = (name, inner, data='') => `<g data-act="${name}" ${data}>${inner}</g>`;
+let _clipN = 0;
+// Part label (for "how does it work" figures): a cream pill with a leader line to a 3D point on the part.
+// dx, dy = where the pill sits, in screen units at the reference zoom (they scale with the figure like stroke widths).
+// on = that part is working right now (the pill turns the accent colour). Labels can be hidden with the Labels switch.
+function tag(p3, dx, dy, text, on=false){
+  // on a phone (LBL_U = drawing units per screen px) the pill is a numbered badge and the names go in a legend under the figure
+  const u = window.LBL_U ? LBL_U() : 0, n = ((window.__ln || (window.__ln = {}))[text] || (__ln[text] = Object.keys(__ln).length + 1));
+  const k = INK_K, [X,Y] = P(...p3), fs = u ? 10*u : 8.6*k, h = u ? 17*u : fs*1.8, w = u ? h*(n > 9 ? 1.3 : 1) : text.length*fs*.62 + fs*1.5, cx = X + dx*k, cy = Y + dy*k;
+  return `<g class="tag${on ? ' on' : ''}" data-n="${n}" data-t="${text}"><path d="M${f(X)} ${f(Y)}L${f(cx)} ${f(cy)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(1.3*k)}" fill="${INK}"/>`
+    + `<rect x="${f(cx-w/2)}" y="${f(cy-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+    + `<text x="${f(cx)}" y="${f(cy+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? n : text}</text></g>`;
+}
+const clipTo = (pts3, inner) => { const id = 'k' + (++_clipN); return `<clipPath id="${id}"><path d="${pd(pts3)}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
+
+/* ---------- constant on-screen line weight ----------
+   Stroke widths are written in model units, and each figure is zoomed to fill the frame, so a small
+   object would get fat lines. INK_K rescales every stroke-width (and the wobble/grain filter) so all
+   figures match the reference zoom of the booth / vending machine (viewBox ≈ 585 units wide). */
+const INK_REF_VB = 585;
+let INK_K = 1;
+const inkScale = svg => INK_K === 1 ? svg : svg.replace(/stroke-width="([\d.]+)"/g, (_, w) => `stroke-width="${(+w * INK_K).toFixed(2)}"`);
+
+/* ---------- page shell ---------- */
+const CORE_CSS = `
+  :root{--paper:#f2efe7;--ink:#231e16;--muted:#857d6e;--rule:#ddd6c8}
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background-color:var(--paper);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .42  0 0 0 0 .39  0 0 0 0 .33  .16 0 0 0 0'/></filter><rect width='100%' height='100%' filter='url(%23p)'/></svg>");
+    overflow-x:hidden;color:var(--ink);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;display:flex;flex-direction:column;align-items:center;padding:24px 16px 32px}
+  header{width:100%;max-width:760px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  header h1{font-size:13px;font-weight:600;margin:0;letter-spacing:.02em} header span{color:var(--muted)}
+  #fig{width:100%;max-width:760px;height:auto;display:block;margin:4px 0 8px;user-select:none;overflow:visible}
+  #fig{cursor:grab;touch-action:pan-y} #fig.drag{cursor:grabbing} #fig [data-act]{cursor:pointer}
+  #readout, .idea{display:none}   /* status line + big idea are off: the buttons and motion tell the story */
+  .idea{width:100%;max-width:760px;margin:-6px 0 16px;font-size:12.5px;line-height:1.5;text-align:center;color:var(--ink)}
+  .idea strong{letter-spacing:.12em;text-transform:uppercase;font-size:11px;margin-right:8px}
+  #readout{position:relative;min-height:1.4em;letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px;text-align:center;text-shadow:0 0 3px var(--paper),0 0 6px var(--paper),0 0 10px var(--paper)}
+  .stage{position:relative;width:100%;max-width:760px}
+  .actions{position:absolute;top:4px;left:0;display:flex;flex-direction:column;align-items:flex-start;gap:8px;z-index:2;max-width:220px}
+  .actions .cap{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 2px}
+  html.nolabels #fig .tag{display:none}
+  .ctl[hidden]{display:none}
+  /* ui.flash(text): a short note under the buttons ("the can is empty — refill it"); the status line itself stays hidden */
+  .toast{position:absolute;left:0;z-index:3;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;background:var(--paper);
+    border:1.5px solid var(--ink);border-radius:8px;padding:4px 9px;box-shadow:2px 2px 0 var(--ink);opacity:0;transition:opacity .2s;pointer-events:none;max-width:240px}
+  .toast.show{opacity:1}
+  .made-with{width:100%;max-width:760px;margin-top:18px;text-align:right;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  .made-with a{color:var(--muted);text-decoration:none} .made-with a:hover{color:var(--ink)}
+  .stats{position:absolute;top:4px;right:0;display:flex;flex-direction:column;align-items:flex-end;gap:10px;z-index:2;text-align:right}
+  .stat .k{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-size:34px;font-weight:800;line-height:1.05;letter-spacing:-.01em;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .stat.small .v{font-size:20px}
+  .stat .v.bump{animation:bump .35s ease-out}
+  @keyframes bump{0%{transform:scale(1.18)}100%{transform:none}}
+  .stepwrap{position:relative;display:flex;align-items:center;gap:8px}
+  .act{font:inherit;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer;white-space:nowrap}
+  .act:hover{background:color-mix(in srgb,var(--paper) 92%,var(--ink))}
+  .act .car{margin-left:6px;font-size:10px}
+  .act:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+  .chips{display:none;flex-wrap:wrap;gap:6px;background:var(--paper);border:2px solid var(--ink);border-radius:12px;box-shadow:3px 3px 0 var(--ink);
+    padding:8px;width:max-content;max-width:min(300px,62vw);position:absolute;left:calc(100% + 10px);top:-4px;z-index:3}
+  .stepwrap.open .chips{display:flex}
+  .chip{white-space:nowrap;font:inherit;font-size:11.5px;font-weight:700;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:8px;padding:4px 8px;cursor:pointer;box-shadow:2px 2px 0 var(--ink)}
+  .chip:hover{background:var(--accent,#f4b829);transform:translate(-1px,-1px)}
+  .chip.current{background:var(--ink);color:var(--paper)} .chip.current:hover{background:var(--ink);transform:none}
+  .chip.off{opacity:.45} .chip.off:hover{transform:none;background:var(--paper)}
+  
+  @media (max-width:560px){body{padding:14px 12px 24px}header span,.actions .cap{display:none}.actions{flex-direction:row;flex-wrap:wrap;gap:6px}.act{font-size:12px;padding:4px 11px}.stats{position:static;flex-direction:row;justify-content:flex-end;gap:18px;margin-bottom:4px}.actions{position:static;max-width:none;margin:6px 0 4px}.chips{left:0;top:calc(100% + 8px)}}
+  .controls{width:100%;max-width:760px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px 28px;border-top:1px solid var(--rule);padding-top:16px}
+  .ctl{display:flex;flex-direction:column;gap:6px}
+  .ctl label{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  input[type=range]{width:100%;accent-color:var(--ink)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;color:var(--ink);background:transparent;border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer}
+  button:hover{background:#0000000d}
+  button[aria-pressed=true]:not(.sw){background:var(--ink);color:var(--paper)}
+  .sw{width:26px;height:26px;padding:0;border-radius:50%} .sw[aria-pressed=true]{outline:2px solid var(--ink);outline-offset:2px}`;
+
+const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB">
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.045/k).toFixed(4)}" numOctaves="2" seed="4" result="warp"/>
+  <feDisplacementMap id="wob" in="SourceGraphic" in2="warp" scale="${(2.4*k).toFixed(2)}" xChannelSelector="R" yChannelSelector="G" result="wob"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.9/k).toFixed(4)}" numOctaves="3" seed="11" result="n1"/>
+  <feColorMatrix in="n1" type="matrix" values=".3 0 0 0 .84  .3 0 0 0 .84  .3 0 0 0 .84  0 0 0 0 1" result="grain"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.012/k).toFixed(4)}" numOctaves="2" seed="7" result="n2"/>
+  <feColorMatrix in="n2" type="matrix" values=".3 0 0 0 .85  .3 0 0 0 .85  .3 0 0 0 .85  0 0 0 0 1" result="blot"/>
+  <feBlend in="wob" in2="grain" mode="multiply" result="g1"/><feBlend in="g1" in2="blot" mode="multiply" result="g2"/>
+  <feComposite in="g2" in2="wob" operator="in"/></filter>`;
+
+/* mountFigure({
+     fig:'03', title:'Photo booth', hint:'click the curtain…',
+     size:[W,D,H],                 // bounding box, used to frame the view (shadow range included)
+     palette:'mustard',            // default PALS key
+     state:{...},                  // figure state (st.pal is built in)
+     scene: (st, m) => svgString,  // m = current palette {l,m,d}
+     readout: st => 'text',        // status line under the figure
+     buttons: [{label, onClick(st, ui)}      // listed in the order the user should do them
+               | {label, choices: st => [{label, onClick(st,ui), current?, disabled?, why?}]}],   // opens a picker
+     stats: st => [{label, value, small?}],   // optional: big numbers top-right (credit, change, score)
+     credit: false,                // optional: hide the small "Made with Colorfigures" link
+     acts: { name(st, el, ui){} },  // clicks on act(name, …) groups; el has dataset
+     params(st, q){}               // optional: read URLSearchParams for screenshot states
+   })  -> ui = { st, render, animate(stepFn), flash(text,ms) }
+   animate(step): calls step(dt seconds) every frame and re-renders until step returns false. */
+addEventListener('error', e => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + e.message + ';'; });
+/* The hand-drawn filter's noise never changes, but browsers recompute every feTurbulence each time the drawing changes
+   (on phones SVG filters run on the CPU, so this is most of the cost of a frame). bakeNoise renders each noise layer once
+   into an image and swaps it in: coarse layers as one small image over the whole view (they are smooth, so scaling up
+   is invisible), fine grain as a seamless tile. If anything fails (an old browser), the live filter simply stays. */
+function bakeNoise(svg){
+  const fl = document.getElementById('hand'); if (!fl || typeof Image === 'undefined') return;
+  const NS = 'http://www.w3.org/2000/svg', vb = svg.viewBox.baseVal;
+  const x0 = vb.x - vb.width*.35, y0 = vb.y - vb.height*.35, w0 = vb.width*1.7, h0 = vb.height*1.7;
+  for (const t of [...fl.querySelectorAll('feTurbulence')]){
+    const fq = parseFloat(t.getAttribute('baseFrequency')), oct = +(t.getAttribute('numOctaves') || 1);
+    if (!(fq > 0)) continue;
+    const fine = fq * Math.max(w0, h0) > 80;
+    if (fine) continue;   // fine grain stays live: a repeated tile leaves faint seams on some GPUs
+    const rx = fine ? 0 : x0, ry = fine ? 0 : y0, rw = fine ? 48 / fq : w0, rh = fine ? 48 / fq : h0;
+    const ppu = fq * (fine ? 7 : 5) * Math.pow(2, Math.max(0, oct - 1) * .5), PW = Math.ceil(rw * ppu), PH = Math.ceil(rh * ppu);
+    if (PW * PH > 1200 * 1200) continue;
+    const tb = t.cloneNode(); tb.removeAttribute('result'); if (fine) tb.setAttribute('stitchTiles', 'stitch');
+    const src = `<svg xmlns="${NS}" width="${PW}" height="${PH}" viewBox="${rx} ${ry} ${rw} ${rh}"><filter id="n" filterUnits="userSpaceOnUse" x="${rx}" y="${ry}" width="${rw}" height="${rh}" color-interpolation-filters="sRGB">${tb.outerHTML}</filter><rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" filter="url(#n)"/></svg>`;
+    const img = new Image();
+    img.onload = () => { try {
+      const c = document.createElement('canvas'); c.width = PW; c.height = PH; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      // store the noise's colour values fully opaque: the filter reads its colour channels, and an image with
+      // see-through pixels would be read premultiplied (darker) by some browsers
+      const px = g.getImageData(0, 0, PW, PH); for (let i = 3; i < px.data.length; i += 4) px.data[i] = 255; g.putImageData(px, 0, 0);
+      const url = c.toDataURL('image/png'), res = t.getAttribute('result');
+      const im = document.createElementNS(NS, 'feImage');
+      // a tile must sit inside the filter's region (the drawing's box) or it gets clipped: anchor it at the drawing's
+      // centre, snapped to whole tiles so the grain keeps the same phase as the live noise would
+      let ox = rx, oy = ry;
+      if (fine){ const bb = svg.getElementById ? document.getElementById('art').getBBox() : { x: 0, y: 0, width: 0, height: 0 };
+        ox = Math.floor((bb.x + bb.width/2) / rw) * rw; oy = Math.floor((bb.y + bb.height/2) / rh) * rh; }
+      for (const [k, v] of [['x', ox], ['y', oy], ['width', rw], ['height', rh], ['preserveAspectRatio', 'none']]) im.setAttribute(k, v);
+      im.setAttribute('href', url); im.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', url);
+      if (!t.isConnected) return;
+      if (fine){ im.setAttribute('result', res + '_tile'); const tl = document.createElementNS(NS, 'feTile'); tl.setAttribute('in', res + '_tile'); tl.setAttribute('result', res); t.replaceWith(im, tl); }
+      else { im.setAttribute('result', res); t.replaceWith(im); }
+    } catch (e) {} };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+  }
+}
+function mountFigure(cfg){
+  document.title = cfg.title;
+  const style = document.createElement('style'); style.textContent = CORE_CSS; document.head.appendChild(style);
+  document.body.innerHTML = `
+    <header><h1>Fig. ${cfg.fig} — ${cfg.title}</h1></header>
+    <div class="stage">
+      ${cfg.buttons && cfg.buttons.length ? `<div class="actions" id="btns"></div>` : ''}
+      ${cfg.stats ? '<div class="stats" id="stats"></div>' : ''}
+      <div class="toast" id="toast" role="status"></div>
+      <svg id="fig" role="img" aria-label="${cfg.title}"><defs id="fdefs"></defs><g id="art" filter="url(#hand)"></g></svg>
+    </div>
+    <div id="readout"></div>
+    ${cfg.idea ? `<p class="idea"><strong>The big idea</strong>${cfg.idea}</p>` : ''}
+    <div class="controls">
+      <div class="ctl"><label for="wb">Hand-drawn wobble</label><input id="wb" type="range" min="0" max="7" step="0.1" value="2.4"></div>
+      <div class="ctl"><label>Colour</label><div class="row" id="pals"></div></div>
+      <div class="ctl"><label>View</label><div class="row"><button id="vreset">Front view</button><button id="vspin" aria-pressed="false">Turntable</button></div></div>
+      <div class="ctl" id="lblctl" hidden><label>Labels</label><div class="row"><button id="lbl" aria-pressed="true">On</button></div></div>
+    </div>
+    ${cfg.credit === false ? '' : '<footer class="made-with"><a href="https://april-zhu.com/colorfigures" target="_blank" rel="noopener">Made with Colorfigures ↗</a></footer>'}`;
+  const st = cfg.state || {};            // kept as the same object, so a figure may hold on to it
+  if (!st.pal) st.pal = cfg.palette || 'mustard';
+  if (st.az == null) st.az = 105;
+  const q = new URLSearchParams(location.search);
+  // a figure turns all the way round only once it has been checked from every side (turn:'full'); otherwise it turns
+  // +-60 deg around the front, where it was drawn. ?free=1 unlocks it for testing.
+  CAM_LIM = cfg.turn === 'full' || q.get('free') === '1' ? null : 60;
+  if (PALS[q.get('pal')]) st.pal = q.get('pal');
+  if (cfg.params) cfg.params(st, q);
+
+  // frame on the object itself: centred, filling ~60% of the width / ~78% of the height of a 4:3 view.
+  // The cast shadow is allowed to spill outside the frame (svg overflow is visible).
+  const [W,D,H] = cfg.size, pts = [];
+  OX = OY = 0; RC = cfg.center || [W/2, D/2]; RCZ = H/2;
+  VIEW = 0; setCam(YAW0, PITCH0);
+  for (const x of [0,W]) for (const y of [0,D]) for (const z of [0,H]) pts.push(P(x,y,z));
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const bw = Math.max(...xs)-Math.min(...xs), bh = Math.max(...ys)-Math.min(...ys);
+  // the object fills ~74% of the width / ~88% of the height, nudged right of centre so the buttons (top left) stay clear
+  // on a phone (FIG_A, from the gallery) the frame grows taller than 4:3, as far as the object needs, so tall machines fill it;
+  // the spare height goes mostly below; the object stays centred (its shadow may run off the edge, by the owner's call)
+  const PA = window.FIG_A ? FIG_A() : .75, A = PA === .75 ? .75 : Math.min(PA, Math.max(.75, bh/.88/(bw/.74)*1.08)), vbW = Math.max(bw/.74, bh/.88/A), vbH = vbW*A;
+  OX = (vbW-bw)/2 + (PA === .75 ? vbW*.06 : 0) - Math.min(...xs); OY = (PA === .75 ? vbH*.04 : (vbH - bh)*.3) - Math.min(...ys);   // sit a little high: shadows fall downward
+  const svg = document.getElementById('fig');
+  svg.setAttribute('viewBox', `0 0 ${f(vbW)} ${f(vbH)}`);
+  INK_K = vbW / INK_REF_VB;
+  document.getElementById('fdefs').innerHTML = filterFor(INK_K);
+  bakeNoise(svg);
+
+  const art = document.getElementById('art'), readout = document.getElementById('readout');
+  const ui = { st };
+  ui.render = () => { _clipN = 0; document.documentElement.style.setProperty('--accent', PALS[st.pal].l); art.innerHTML = inkScale(cfg.scene(st, PALS[st.pal])); if (!ui._flash) readout.textContent = cfg.readout ? cfg.readout(st) : ''; if (ui.drawStats) ui.drawStats(); };
+  // big numbers in the top-right corner (credit, change, score…); a value that changes gets a little bump
+  const statsEl = document.getElementById('stats'), prevStats = {};
+  ui.drawStats = () => { if (!statsEl) return;
+    const list = cfg.stats(st).filter(Boolean), html = list.map(x => `<div class="stat${x.small ? ' small' : ''}"><div class="k">${x.label}</div><div class="v" data-k="${x.label}">${x.value}</div></div>`).join('');
+    if (statsEl._html !== html){ statsEl._html = html; statsEl.innerHTML = html;
+      statsEl.querySelectorAll('.v').forEach(v => { if (prevStats[v.dataset.k] != null && prevStats[v.dataset.k] !== v.textContent) v.classList.add('bump'); prevStats[v.dataset.k] = v.textContent; }); } };
+  let flashT = 0;
+  const toast = document.getElementById('toast');
+  ui.flash = (text, ms=1600) => { ui._flash = true; readout.textContent = text; toast.textContent = text;
+    toast.style.top = ((document.getElementById('btns') ? document.getElementById('btns').offsetTop + document.getElementById('btns').offsetHeight : 0) + 8) + 'px'; toast.classList.add('show');
+    clearTimeout(flashT); flashT = setTimeout(() => { ui._flash = false; toast.classList.remove('show'); ui.render(); }, ms); };
+  // One frame driver for every running animation: each frame runs all the steps, then draws once (two animations at
+  // the same time no longer draw twice). It follows the screen's frames, with a timer fallback for when frames don't
+  // come (headless shots, a hidden tab). ui.invalidate() asks for one redraw on the next frame (used while dragging).
+  const steps = new Set(); let driving = false, lastT = 0, fbT = 0;
+  const frame = () => { if (!driving) return; driving = false; clearTimeout(fbT);
+    const now = performance.now(), dt = Math.max(0, Math.min(.05, (now - lastT) / 1000)); lastT = now;
+    for (const s of [...steps]) if (s(dt) === false) steps.delete(s);
+    ui.render(); if (steps.size) drive(); };
+  const drive = () => { if (driving) return; driving = true; requestAnimationFrame(frame); fbT = setTimeout(frame, 60); };
+  ui.animate = step => { if (!steps.size && !driving) lastT = performance.now(); steps.add(step); drive(); };
+  ui.invalidate = () => drive();
+
+  // clickable parts react on press, not on click: while something animates, the scene is redrawn every frame, so the
+  // element under the pointer is replaced between press and release and a 'click' would never fire
+  svg.addEventListener('pointerdown', e => { if (e.button) return; const a = e.target.closest('[data-act]'); if (!a || !cfg.acts || !cfg.acts[a.dataset.act]) return;
+    e.preventDefault(); cfg.acts[a.dataset.act](st, a, ui); ui.render(); });
+  // orbit: drag anywhere that is not a clickable part (the machine turns the way the finger moves); arrow keys nudge; double-click eases back to the front view
+  let drag = null, spin = false, camAnim = 0;
+  const camTo = (y, p, ms=700) => { const y0 = YAW, p0 = PITCH, dy = ((y - y0 + 540) % 360) - 180, id = ++camAnim; let t = 0;
+    ui.animate(dt => { if (id !== camAnim) return false; t += dt*1000; const k = Math.min(1, t / ms), e = ease(k); setCam(y0 + dy*e, p0 + (p - p0)*e); return k < 1; }); };
+  ui.camTo = camTo;
+  svg.addEventListener('pointerdown', e => { if (e.button || e.target.closest('[data-act]')) return;
+    camAnim++; drag = { x:e.clientX, y:e.clientY, yaw:YAW, pitch:PITCH }; svg.classList.add("drag"); try { svg.setPointerCapture(e.pointerId); } catch {} });
+  svg.addEventListener('pointermove', e => { if (!drag) return; const k = 300 / svg.getBoundingClientRect().width;
+    setCam(drag.yaw + (e.clientX - drag.x)*.55*k, drag.pitch + (e.clientY - drag.y)*.35*k); ui.invalidate(); });
+  const endDrag = () => { drag = null; svg.classList.remove('drag'); };
+  svg.addEventListener('pointerup', endDrag); svg.addEventListener('pointercancel', endDrag);
+  svg.addEventListener('dblclick', e => { if (!e.target.closest('[data-act]')) camTo(YAW0, PITCH0); });
+  addEventListener('keydown', e => { const k = { ArrowLeft:[-15,0], ArrowRight:[15,0], ArrowUp:[0,8], ArrowDown:[0,-8] }[e.key];
+    if (!k || window.GAME_KEYS || /input|textarea/i.test(e.target.tagName)) return; e.preventDefault(); camTo(YAW + k[0], PITCH + k[1], 260); });   // a game figure keeps the arrows for play
+  document.getElementById('vreset').onclick = () => { spin = false; vsp.setAttribute('aria-pressed', false); camTo(YAW0, PITCH0); };
+  const vsp = document.getElementById('vspin');
+  vsp.onclick = () => { spin = !spin; vsp.setAttribute('aria-pressed', spin); camAnim++;
+    let dir = 1;   // with a turning limit, the turntable swings back and forth inside it
+    if (spin) ui.animate(dt => { if (!spin) return false; if (!drag){ let y = YAW + dir*dt*18;
+      if (CAM_LIM != null && Math.abs(y - YAW0) >= CAM_LIM - .5){ dir = -dir; y = YAW + dir*dt*18; } setCam(y, PITCH); } return true; }); };
+  if (q.has('yaw') || q.has('pitch')) setCam(+(q.get('yaw') ?? YAW0), +(q.get('pitch') ?? PITCH0));
+  const btns = document.getElementById('btns');
+  const stepEls = [];
+  if (btns) cfg.buttons.forEach((b, i) => {
+    const wrap = document.createElement('div'); wrap.className = 'stepwrap';
+    const el = document.createElement('button'); el.className = 'act';
+    el.innerHTML = `${b.label}${b.choices ? '<span class="car">▾</span>' : ''}`;
+    wrap.appendChild(el); btns.appendChild(wrap); stepEls.push(el);
+    if (!b.choices){ el.onclick = () => { closeChips(); b.onClick(st, ui); ui.render(); }; return; }
+    const chips = document.createElement('div'); chips.className = 'chips'; wrap.appendChild(chips);
+    el.onclick = e => { e.stopPropagation(); const open = !wrap.classList.contains('open'); closeChips();
+      if (!open) return;
+      chips.innerHTML = '';
+      // every choice stays clickable, so nothing silently ignores a press:
+      //   current:true  = the one in use (shown selected); a press just says so
+      //   disabled:true = not possible right now (shown faded); a press says why (c.why, or a generic note)
+      for (const c of b.choices(st)){ const ch = document.createElement('button'); ch.className = 'chip' + (c.current ? ' current' : c.disabled ? ' off' : ''); ch.textContent = c.label;
+        if (c.current) ch.setAttribute('aria-pressed', 'true');
+        ch.onclick = ev => { ev.stopPropagation(); closeChips();
+          if (c.current) return ui.flash(`${c.label} — already set`);
+          if (c.disabled) return ui.flash(c.why || `${c.label} isn't possible right now`);
+          c.onClick(st, ui); ui.render(); }; chips.appendChild(ch); }
+      wrap.classList.add('open'); };
+  });
+  function closeChips(){ document.querySelectorAll('.stepwrap.open').forEach(w => w.classList.remove('open')); }
+  document.addEventListener('click', closeChips);
+
+  document.getElementById('wb').oninput = e => document.getElementById('wob').setAttribute('scale', (e.target.value * INK_K).toFixed(2));
+  const pals = document.getElementById('pals');
+  for (const [k,p] of Object.entries(PALS)){
+    const b = document.createElement('button'); b.className='sw'; b.title=k; b.style.background=p.l; b.setAttribute('aria-pressed', k===st.pal);
+    b.onclick = () => { st.pal=k; [...pals.children].forEach(c=>c.setAttribute('aria-pressed', c===b)); ui.render(); };
+    pals.appendChild(b);
+  }
+  // labels: the switch appears when the figure draws any tag(); ?labels=0 starts with them hidden
+  const lblctl = document.getElementById('lblctl'), lbl = document.getElementById('lbl');
+  const setLabels = on => { document.documentElement.classList.toggle('nolabels', !on); lbl.textContent = on ? 'On' : 'Off'; lbl.setAttribute('aria-pressed', on); };
+  lbl.onclick = () => setLabels(document.documentElement.classList.contains('nolabels'));
+  if (q.get('labels') === '0') setLabels(false);
+  // testing: ?press=Label@ms,Label@ms clicks the buttons whose text starts with Label at those times after load
+  // (any order, repeats allowed); Label>Choice picks a choice from a picker button (?press=Speed>3@300).
+  // Script errors and unknown labels are recorded on <html data-errors="…">
+  window.__st = st;
+  const noteErr = m => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + m + ';'; };
+  const starts = (el, t) => el.textContent.trim().toLowerCase().startsWith(t.trim().toLowerCase());
+  if (q.has('press')) q.get('press').split(',').forEach(item => { const [what, ms] = item.split('@'), [label, choice] = what.split('>');
+    setTimeout(() => { const b = [...document.querySelectorAll('.act')].find(b => starts(b, label));
+      if (!b) return noteErr(`no button "${label}"`);
+      b.click(); if (choice == null) return;
+      const c = [...b.parentElement.querySelectorAll('.chip')].find(c => starts(c, choice));
+      if (c && !c.disabled) c.click(); else noteErr(`no choice "${choice}" in "${label}"`); }, +ms || 0); });
+  setLight(st.az); ui.render();
+  if (art.querySelector('.tag')) lblctl.hidden = false;
+  return ui;
+}
+
+/* ---------- see-through + labels kit (shared; the figure supplies its own working parts) ----------
+   xrCallouts(items, B): pills in two columns either side of the object, sorted top to bottom so leaders never cross.
+     items: [{ at:[x,y,z], text, on }], B: the object's bounds [x0, x1, y0, y1, z0, z1].
+   xrGhost(body, mech, k, OUTp, x0, x1, m): far walls faintly, the working parts, then the case as a ghost over them.
+   xrMount(getUI, caption): the See-through / Labels switches (top right), the caption under the figure, label hiding. */
+function xrCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  // on a phone (LBL_U = drawing units per screen px) each label is a numbered badge and the names go in a legend under the figure
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const L = [], R = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  for (const it of items){ const [X, Y] = P(...it.at); ((X < cx && roomL) || !roomR ? L : R).push({ ...it, X, Y }); }
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function xrGhost(body, mech, k, OUTp, x0, x1, m){
+  const fF = facing([1,0,0]), fB = facing([-1,0,0]);
+  const far = `<g opacity="${f(.5*k)}">` + loft(on(PX(x0), OUTp), on(PX(x1), OUTp), n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true)
+    + (fF ? fill(pd(on(PX(x0), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + (fB ? fill(pd(on(PX(x1), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...on(PX(x0), OUTp), ...on(PX(x1), OUTp)], 2.8) + `</g>`;
+}
+function xrMount(getUI, caption, opt = {}){   // opt.labelsOnly: only the Labels switch (the insides are on show already)
+  const ui = getUI(), q = new URLSearchParams(location.search), html = document.documentElement;
+  if (q.get('labels') !== '1') html.classList.add('nolabels');
+  if (ui.st.xr == null){ ui.st.xr = 0; ui.st.xrT = 0; }
+  if (q.get('xr') === '1') ui.st.xr = ui.st.xrT = 1;
+  const old = document.getElementById('lblctl'); if (old) old.style.display = 'none';
+  const vset = document.createElement('div'); vset.className = 'vset';
+  vset.innerHTML = '<div class="vrow">' + (opt.labelsOnly ? '' : '<button class="act" id="xrb" aria-pressed="false">See-through</button>') + '<button class="act" id="lblb" aria-pressed="false">Labels</button></div>';
+  document.querySelector('.stage').appendChild(vset);
+  // pages with a stats panel in the top right: the switches go just under it
+  const place = () => { const sp = document.getElementById('stats'); vset.style.top = sp ? (sp.offsetTop + sp.offsetHeight + 10) + 'px' : ''; };
+  place(); new ResizeObserver(place).observe(document.getElementById('stats') || vset);
+  const xrb = document.getElementById('xrb'), lblb = document.getElementById('lblb');
+  const sync = () => { if (xrb) xrb.setAttribute('aria-pressed', !!getUI().st.xrT); lblb.setAttribute('aria-pressed', !html.classList.contains('nolabels')); };
+  if (xrb) xrb.onclick = () => { const u = getUI(), st = u.st; st.xr = st.xr || 0; st.xrT = st.xrT ? 0 : 1; sync();
+    u.animate(dt => { const g = Math.sign(st.xrT - st.xr); st.xr = Math.min(1, Math.max(0, st.xr + g*dt/.7)); return st.xr !== st.xrT; }); };
+  lblb.onclick = () => { html.classList.toggle('nolabels'); sync(); };
+  sync();
+  const cap = document.createElement('p'); cap.className = 'mcap'; document.querySelector('.stage').after(cap);
+  const css = document.createElement('style');
+  css.textContent = '.vset{position:absolute;top:4px;right:0;z-index:2}.vrow{display:flex;gap:6px}.vset .act[aria-pressed=true]{background:var(--ink);color:var(--paper)}'
+    + 'html.nolabels #fig .tag{display:none}.mcap{width:100%;max-width:760px;min-height:3em;margin:0 0 14px;font-size:12.5px;line-height:1.5;text-align:center;transition:opacity .3s}'
+    + '@media (max-width:560px){.vset{position:static;margin:4px 0}}';
+  document.head.appendChild(css);
+  const r0 = ui.render; ui.render = () => { r0(); const st = getUI().st; cap.style.opacity = st.xr > .5 ? 1 : 0; cap.textContent = caption(st); };
+  ui.render();
+}
+// same, for a body lofted between two horizontal rings A (bottom) and B (top)
+function xrGhostRings(body, mech, k, A, B, m){
+  const far = `<g opacity="${f(.5*k)}">` + loft(A, B, n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true) + fill(pd(A), mix(m.d, '#f2efe7', .5)) + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...A, ...B], 2.8) + `</g>`;
+}
+// generic see-through for any figure: the whole drawing fades back and the inside parts show over it.
+//   opts: { mech(st, k) -> svg, inside(st) -> label items, surface(st) -> label items (optional), B: bounds, getSt() }
+// washer-style ghost for an object without a single box case: its inside parts first, then the object pale over them
+const xrUnder = (svg, mech, k) => `<g opacity="${f(k)}">${mech}</g><g opacity="${f(1 - .62*k)}">${svg}</g>`;
+function xrWrap(sceneFn, opts){
+  return function(){
+    let s = sceneFn.apply(this, arguments);
+    const st = opts.getSt(), k = ease(st.xr || 0);
+    if (k > 0 && opts.under) s = xrUnder(s, opts.mech(st, k), k);   // the whole drawing is the object
+    else if (k > 0 && !opts.inline) s = `<g opacity="${f(1 - .5*k)}">${s}</g><g opacity="${f(k)}">${opts.mech(st, k)}</g>`;   // inline: the figure ghosts its own case
+    const items = k > .6 ? opts.inside(st) : opts.surface ? opts.surface(st) : [];
+    return s + (items.length ? xrCallouts(items, opts.B) : '');
+  };
+}
+
+/* ---------- game keypad: mountKeypad({ rows, hub:[col,row], action:'DROP', keys:[{ key:'ArrowLeft', glyph:'\u25c0', name, at:[col,row] }] })
+   An inked pad under the buttons that sends the same keyboard events as the arrows and space (set window.GAME_KEYS = true
+   so the arrows play instead of turning the camera). ---------- */
+function mountKeypad(spec){
+  const host = document.getElementById('btns'); if (!host) return;
+  const css = document.createElement('style');
+  css.textContent = `.kpad{display:flex;align-items:center;gap:16px;margin-top:6px;padding:10px 12px;border:1.5px solid var(--ink);border-radius:14px;
+      background:var(--paper);box-shadow:0 3px 0 var(--ink);touch-action:none;user-select:none;-webkit-user-select:none}
+    .kpad .dp{display:grid;grid-template-columns:repeat(3,34px);grid-template-rows:repeat(var(--rows),34px);gap:3px}
+    .kpad .k{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:34px;height:34px;cursor:pointer;
+      background:#fbf7ea;border:1.5px solid var(--ink);border-radius:7px;box-shadow:0 3px 0 var(--ink);color:var(--ink);font:700 13px ui-monospace,Menlo,monospace;
+      transition:transform .05s,box-shadow .05s,background .05s}
+    .kpad .hub{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
+    .kpad .hub i{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--ink);background:#e6e0d1}
+    .kpad .go{all:unset;box-sizing:border-box;width:62px;height:62px;border-radius:50%;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:#e2483d;border:1.5px solid var(--ink);box-shadow:0 4px 0 var(--ink),inset 0 -5px 0 rgba(0,0,0,.18);color:#fff;font:800 12px ui-monospace,Menlo,monospace;letter-spacing:.06em;
+      transition:transform .05s,box-shadow .05s}
+    .kpad .go small{font:700 8px ui-monospace,Menlo,monospace;opacity:.85;letter-spacing:.08em;margin-top:2px}
+    .kpad .down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+    .kpad .k.down{background:var(--accent,#f4b829)}
+    .kpad .go.down{transform:translateY(3px);box-shadow:0 1px 0 var(--ink),inset 0 -3px 0 rgba(0,0,0,.18)}
+    @media (max-width:560px){.kpad{gap:22px;padding:10px 16px}.kpad .dp{grid-template-columns:repeat(3,44px);grid-template-rows:repeat(var(--rows),44px)}
+      .kpad .k,.kpad .hub{width:44px;height:44px;font-size:15px}.kpad .go{width:74px;height:74px}}`;
+  document.head.appendChild(css);
+  const pad = document.createElement('div'); pad.className = 'kpad'; pad.setAttribute('role', 'group'); pad.setAttribute('aria-label', 'Keypad');
+  const dp = document.createElement('div'); dp.className = 'dp'; dp.style.setProperty('--rows', spec.rows);
+  const els = {};
+  for (const k of spec.keys){
+    const b = document.createElement('button'); b.className = 'k'; b.textContent = k.glyph; b.setAttribute('aria-label', k.name);
+    b.style.gridColumn = k.at[0] + 1; b.style.gridRow = k.at[1] + 1; dp.appendChild(b); els[k.key] = b; }
+  if (spec.hub){ const h = document.createElement('div'); h.className = 'hub'; h.innerHTML = '<i></i>'; h.style.gridColumn = spec.hub[0] + 1; h.style.gridRow = spec.hub[1] + 1; dp.appendChild(h); }
+  const go = document.createElement('button'); go.className = 'go'; go.innerHTML = `${spec.action}<small>SPACE</small>`; go.setAttribute('aria-label', spec.action);
+  els[' '] = go;
+  pad.append(dp, go); host.appendChild(pad);
+  const send = (type, key) => dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }));
+  for (const [key, el] of Object.entries(els)){
+    let held = null;
+    el.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); if (held != null) return; held = e.pointerId;
+      try { el.setPointerCapture(e.pointerId); } catch (_) {} send('keydown', key); });
+    const release = e => { if (held == null || (e && e.pointerId !== held)) return; held = null; send('keyup', key); };
+    el.addEventListener('pointerup', release); el.addEventListener('pointercancel', release); el.addEventListener('lostpointercapture', release);
+    el.addEventListener('click', e => e.preventDefault());
+    el.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); send('keydown', key); setTimeout(() => send('keyup', key), 120); } });
+  }
+  // space belongs to the game: a button that still has the focus from a click must not be pressed by it too
+  addEventListener('keydown', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  addEventListener('keyup', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  // light the keys for real key presses too (and for the pad's own, which arrive the same way)
+  addEventListener('keydown', e => { const el = els[e.key]; if (el) el.classList.add('down'); });
+  addEventListener('keyup', e => { const el = els[e.key]; if (el) el.classList.remove('down'); });
+  addEventListener('blur', () => Object.values(els).forEach(el => el.classList.remove('down')));
+}
+
+</script>
+<script>
+/* Drone Lab shared data: the build steps, what every part does, and the drones themselves.
+   Used by the hub (drone-lab.html), the assembly figure (drone-assembly.html) and the simulator (drone-flight.html).
+   Geometry is in millimetres (x = nose direction, y = left, z = up); flight numbers are SI units. */
+
+// Real build order. Props go on LAST on every real build (after the motors have been tested without them) and the
+// battery is only plugged in to fly, so both come after the shell.
+const DL_STEPS = [
+  { k:'frame',   name:'Frame',            t:'The frame is the skeleton: carbon-fibre plates that everything bolts to. It has to be stiff, because any flex shows up as vibration in the gyro.' },
+  { k:'arms',    name:'Arms',             t:'The arms put the motors far enough apart that the props never touch. Longer arms carry bigger props; on most FPV frames a crashed arm unbolts and is swapped in minutes.' },
+  { k:'motors',  name:'Motors',           t:'Brushless motors: a ring of magnets in the spinning bell, coils on the fixed stator. "2207" means a 22 mm wide, 7 mm tall stator. Diagonal motors spin the same way.' },
+  { k:'esc',     name:'ESCs',             t:'Electronic speed controllers turn battery DC into three switched phases that spin each motor, thousands of times a second, at whatever speed the flight controller asks for.' },
+  { k:'fc',      name:'Flight controller',t:'The brain: a gyro measures rotation thousands of times a second, and the PID loop corrects the motors to make the drone rotate exactly as fast as your sticks ask.' },
+  { k:'camera',  name:'Camera & radios',  t:'The camera feeds the video transmitter (VTX) that sends live video to your goggles; the receiver (RX) picks up your radio sticks. Two separate radio links.' },
+  { k:'wiring',  name:'Wiring',           t:'Three motor wires per motor to the ESC, a thick battery lead with a capacitor to soak up voltage spikes, and thin signal wires between the boards.' },
+  { k:'shell',   name:'Top plate / shell',t:'The top plate or shell closes the frame, stiffens it and protects the electronics. It also carries the battery strap or slot.' },
+  { k:'battery', name:'Battery',          t:'A lithium battery: each cell is 4.2 V full and should not go below about 3.5 V under load. It goes on only to fly; weight sits near the centre so the drone balances.' },
+  { k:'props',   name:'Propellers',       t:'Props go on last, always. Half spin clockwise and half counter-clockwise so their twisting forces cancel. Red arrow = clockwise from above, blue = counter-clockwise.' },
+];
+
+// what each kind of part does (shown when a part is clicked, and as its tooltip)
+const DL_PARTS = {
+  plate:    ['FRAME PLATE', 'Carbon-fibre plate. Carbon is light and very stiff; the stack and arms bolt to it.'],
+  arm:      ['ARM', 'Holds a motor out from the centre. The distance between diagonal motors is the "wheelbase".'],
+  duct:     ['DUCT', 'A ring around the prop. It protects people and things and adds a little thrust at low speed, at the cost of drag at high speed.'],
+  standoff: ['STANDOFF', 'Aluminium posts that hold the top plate above the bottom plate and make a box around the electronics.'],
+  foot:     ['FOOT', 'Rubber or legs the drone stands on, so the bottom plate and camera never hit the ground first.'],
+  gear:     ['LANDING GEAR', 'Tall legs keep the big camera clear of the ground on take-off and landing.'],
+  motor:    ['MOTOR', 'Brushless outrunner. Its speed (KV x volts) and the prop size set how much thrust it makes. It spins whichever way the ESC drives it.'],
+  esc:      ['ESC', 'Electronic speed controller: switches battery power through the motor coils in sequence. Changing two motor wires (or a setting) reverses the motor.'],
+  fc:       ['FLIGHT CONTROLLER', 'Reads the gyro about 8000 times a second and runs the PID loop: it works out how hard each motor must push to match the rotation your sticks ask for.'],
+  gyro:     ['GYRO (IMU)', 'Measures rotation speed on three axes. In acro mode this is the only sensor the drone uses: it holds whatever angle you leave it at.'],
+  rx:       ['RECEIVER', 'Picks up your radio transmitter. Throttle, yaw, pitch and roll arrive as numbers the flight controller turns into rotation rates.'],
+  vtx:      ['VIDEO TX', 'Sends the camera picture to your goggles in real time (5.8 GHz). Never power it without an antenna fitted.'],
+  antenna:  ['ANTENNA', 'Antennas stick out the back, away from the carbon frame, which blocks radio signals.'],
+  camera:   ['FPV CAMERA', 'Wide-angle, very low-latency camera you fly through. It is tilted up because the drone leans forward to fly forward.'],
+  action:   ['ACTION CAMERA', 'Records the smooth high-quality footage; the FPV camera is only for flying.'],
+  gimbal:   ['GIMBAL', 'Three small motors hold the camera level whatever the drone does, so the footage stays smooth while the drone tilts.'],
+  gps:      ['GPS', 'Lets the drone know where it is, so it can hold position, fly home and land by itself.'],
+  shell:    ['SHELL', 'Moulded body: keeps rain and dust off the electronics and stiffens the frame.'],
+  canopy:   ['CANOPY', 'Soft TPU cover over the electronics: bends in a crash instead of breaking.'],
+  battery:  ['BATTERY', 'LiPo or Li-ion pack. Cells in series (S) raise the voltage; capacity (mAh) sets flight time. Voltage sags under hard throttle.'],
+  strap:    ['BATTERY STRAP', 'Holds the battery. A loose battery shifts the balance mid-flight.'],
+  xt60:     ['BATTERY LEAD', 'Thick silicone wires and an XT60/XT90 connector carry up to 150 A.'],
+  cap:      ['CAPACITOR', 'Soaks up voltage spikes from the motors that could reset or damage the electronics.'],
+  wire:     ['MOTOR WIRES', 'Three phase wires per motor. Any order works; swapping two reverses the motor.'],
+  pdb:      ['POWER BOARD', 'Power distribution board: splits battery power to every ESC.'],
+  prop:     ['PROPELLER', 'Twisted blades push air down. A CW prop and a CCW prop are mirror images: fit the wrong one and it pushes air up.'],
+  wing:     ['WING', 'Generates lift from forward speed, like a plane, so it flies far on little power.'],
+};
+
+/* Motor layouts: angle from the nose (deg, + toward the left), and spin seen from above (1 = CW, -1 = CCW).
+   Quads use Betaflight's default "props in": front-left and rear-right CW, front-right and rear-left CCW. */
+const dlRing = (n, a0) => Array.from({ length:n }, (_, i) => ({ a: a0 + 360*i/n, dir: i % 2 ? -1 : 1 }));
+const DL_QUAD = dlRing(4, 45);
+
+const DL_DRONES = [
+  { id:'freestyle', name:'5-inch Freestyle', cls:'FPV quad', pal:'tomato', ready:true,
+    blurb:'The do-everything FPV quad: flips, rolls and dives, carrying an action camera.',
+    facts:[['Wheelbase','225 mm'], ['Props','5.1 in, 3 blades'], ['Battery','6S 1300 mAh'], ['Weight','about 650 g']],
+    geo:{ style:'xplate', motors:DL_QUAD, arm:112, armW:14, propR:65, blades:3, motorR:14, motorH:18, plateL:104, plateW:44,
+          standH:28, stack:30.5, action:true, batt:[72, 35, 38], cells:'6S', propCol:'#ef6a4c' },
+    wt:[38, 36, 132, 14, 8, 28, 18, 30, 210, 20],
+    fly:{ mass:.65, twr:9, tau:.035, kd:.055, rate:[200, 670, .54], yawRate:[200, 600, .5], modes:['acro', 'angle'], crashV:8,
+          uptilt:30, cells:6, mAh:1300, Imax:150, kQ:.016, cam:'fpv' } },
+
+  { id:'cinewhoop', name:'3-inch Cinewhoop', cls:'Ducted FPV', pal:'mint', ready:true,
+    blurb:'Ducted props make it safe to fly close to people and indoors for smooth cinematic shots.',
+    facts:[['Wheelbase','140 mm'], ['Props','3 in in ducts'], ['Battery','4S 850 mAh'], ['Weight','about 370 g']],
+    geo:{ style:'duct', motors:DL_QUAD, arm:70, armW:10, propR:38, blades:3, motorR:9, motorH:12, ductR:41, ductH:24,
+          stack:20, batt:[60, 31, 26], cells:'4S', propCol:'#8fd0f0' },
+    wt:[45, 40, 64, 7, 6, 34, 10, 16, 105, 8],
+    fly:{ mass:.37, twr:5, tau:.045, kd:.11, rate:[150, 480, .4], yawRate:[150, 400, .4], modes:['acro', 'angle'], crashV:5.5,
+          uptilt:12, cells:4, mAh:850, Imax:60, kQ:.014, cam:'fpv', ducts:true } },
+
+  { id:'mini', name:'Camera Drone (Mini)', cls:'GPS camera drone', pal:'cobalt', ready:true,
+    blurb:'A folding sub-250 g camera drone. GPS holds it still when you let go of the sticks.',
+    facts:[['Diagonal','247 mm'], ['Props','4 in, 2 blades'], ['Battery','2S 2450 mAh'], ['Weight','249 g']],
+    geo:{ style:'shell', motors:DL_QUAD, propR:50, blades:2, motorR:8, cells:'2S', propCol:'#3d3935' },
+    wt:[48, 22, 28, 6, 12, 32, 4, 20, 77, 4],
+    fly:{ mass:.249, twr:2.4, tau:.05, kd:.035, rate:[100, 200, .2], yawRate:[60, 120, .2], modes:['gps', 'sport', 'cine'], crashV:3.2,
+          uptilt:-10, cells:2, mAh:2450, Imax:16, kQ:.012, cam:'gimbal' } },
+
+  { id:'octo', name:'Heavy-lift Octocopter', cls:'Cinema / cargo', pal:'mustard', ready:true,
+    blurb:'Eight big motors lift a cinema camera. Slow to react, very stable, and it can lose a motor and still land.',
+    facts:[['Diagonal','1240 mm'], ['Props','18 in, 2 blades'], ['Battery','2 x 6S 16000 mAh'], ['Weight','about 22 kg']],
+    geo:{ style:'round', motors:dlRing(8, 22.5), arm:620, propR:228, blades:2, motorR:44, gearH:300, plateR:165, gimbal:'cine',
+          cells:'2x 6S', propCol:'#3d3935' },
+    wt:[1900, 1600, 2800, 640, 260, 4200, 420, 380, 9200, 560],
+    fly:{ mass:22, twr:1.9, tau:.18, kd:.47, rate:[60, 120, .2], yawRate:[40, 80, .2], modes:['gps', 'angle'], crashV:2.5,
+          uptilt:-15, cells:6, mAh:32000, Imax:420, kQ:.02, cam:'gimbal' } },
+
+  { id:'race', name:'5-inch Racer', cls:'Race quad', pal:'blush', ready:true,
+    blurb:'Stretched-X, low and light: built for straight-line speed through gates rather than tricks.',
+    facts:[['Wheelbase','215 mm'], ['Props','5 in, 3 blades'], ['Battery','6S 1100 mAh'], ['Weight','about 520 g']],
+    geo:{ style:'xplate', motors:[{a:35,dir:1},{a:145,dir:-1},{a:215,dir:1},{a:325,dir:-1}], arm:108, armW:13, propR:63, blades:3,
+          motorR:14, motorH:17, plateL:96, plateW:34, standH:22, stack:30.5, batt:[70, 34, 34], cells:'6S', propCol:'#f3a6bb' },
+    wt:[30, 30, 128, 14, 8, 22, 16, 22, 185, 18],
+    fly:{ mass:.52, twr:11, tau:.03, kd:.045, rate:[230, 800, .5], yawRate:[200, 600, .5], modes:['acro', 'angle'], crashV:7,
+          uptilt:40, cells:6, mAh:1100, Imax:160, kQ:.016, cam:'fpv' } },
+
+  { id:'longrange', name:'7-inch Long Range', cls:'Long-range FPV', pal:'mint', ready:true,
+    blurb:'Big slow props and a Li-ion pack: 20+ minute flights and kilometres of range, with GPS rescue.',
+    facts:[['Wheelbase','315 mm'], ['Props','7 in, 2 blades'], ['Battery','6S 4000 mAh Li-ion'], ['Weight','about 1050 g']],
+    geo:{ style:'xplate', motors:DL_QUAD, arm:158, armW:16, propR:89, blades:2, motorR:17, motorH:20, plateL:120, plateW:48,
+          standH:30, stack:30.5, gps:true, batt:[72, 44, 42], cells:'6S Li-ion', propCol:'#93d3b0' },
+    wt:[60, 64, 200, 16, 9, 38, 22, 40, 560, 24],
+    fly:{ mass:1.05, twr:4.5, tau:.06, kd:.05, rate:[160, 500, .4], yawRate:[150, 400, .4], modes:['acro', 'angle'], crashV:7,
+          uptilt:20, cells:6, mAh:4000, Imax:70, kQ:.017, cam:'fpv' } },
+
+  { id:'whoop', name:'Racing Tiny Whoop', cls:'65 mm indoor', pal:'blush', ready:true,
+    blurb:'A 28 g palm-sized whoop. Bounces off walls, flies in your living room, teaches acro cheaply.',
+    facts:[['Wheelbase','65 mm'], ['Props','31 mm, 4 blades'], ['Battery','1S 300 mAh'], ['Weight','28 g']],
+    geo:{ style:'duct', whoop:true, motors:DL_QUAD, arm:23, armW:4, propR:15.5, blades:4, motorR:3.6, motorH:8, ductR:17, ductH:12,
+          stack:0, batt:[34, 12, 7], cells:'1S', propCol:'#f4b829' },
+    wt:[4.2, 0, 7.6, 0, 3.4, 3.2, .6, 1.2, 7.2, .8],
+    fly:{ mass:.028, twr:3.4, tau:.02, kd:.006, rate:[180, 720, .5], yawRate:[180, 600, .5], modes:['acro', 'angle'], crashV:9,
+          uptilt:15, cells:1, mAh:300, Imax:7, kQ:.012, cam:'fpv', ducts:true } },
+
+  { id:'hexa', name:'Mapping Hexacopter', cls:'Survey / inspection', pal:'cobalt', ready:true,
+    blurb:'Six motors and GPS: flies survey grids by itself, carrying a downward mapping camera.',
+    facts:[['Diagonal','960 mm'], ['Props','15 in, 2 blades'], ['Battery','6S 10000 mAh'], ['Weight','about 7 kg']],
+    geo:{ style:'round', motors:dlRing(6, 30), arm:480, propR:190, blades:2, motorR:34, gearH:230, plateR:130, gimbal:'map',
+          cells:'6S', propCol:'#3d3935' },
+    wt:[900, 600, 960, 300, 180, 650, 220, 260, 2600, 260],
+    fly:{ mass:7, twr:2.1, tau:.12, kd:.2, rate:[70, 140, .2], yawRate:[45, 90, .2], modes:['gps', 'angle'], crashV:2.8,
+          uptilt:-30, cells:6, mAh:10000, Imax:180, kQ:.019, cam:'gimbal' } },
+
+  { id:'wing', name:'FPV Flying Wing', cls:'Fixed wing', pal:'mustard', ready:false,
+    blurb:'No tail, one pusher prop and two elevons. Flies an hour on a small battery, but needs forward speed to stay up.',
+    facts:[['Span','1100 mm'], ['Prop','7 in pusher'], ['Battery','4S 2200 mAh'], ['Weight','about 900 g']] },
+
+  { id:'vtol', name:'Quadplane VTOL', cls:'Hybrid VTOL', pal:'tomato', ready:false,
+    blurb:'Takes off straight up on four lift motors, then a pusher prop and wing take over for efficient cruise.',
+    facts:[['Span','1600 mm'], ['Lift','4 x 12 in'], ['Battery','6S 8000 mAh'], ['Weight','about 4.5 kg']] },
+];
+const dlDrone = id => DL_DRONES.find(d => d.id === id) || DL_DRONES[0];
+
+</script>
+<script>
+(() => {
+/* Drone Lab flight simulator.
+   Physics (240 Hz): rigid body with gravity, quadratic drag, per-motor thrust with first-order spin-up lag, prop
+   reaction torque for yaw, battery sag. Control: the same loops a real flight controller runs (rate PID in Acro;
+   self-levelling in Angle; velocity + altitude hold in GPS modes) and a real mixer (throttle + roll + pitch + yaw
+   shares per motor, clipped like airmode). Rendering: a small painter's-algorithm 3D engine on a canvas, drawn in
+   flat light/mid/dark tones with ink outlines to match the Colorfigures assembly view. World units are metres;
+   x east, y north, z up; body frame x forward, y left, z up. */
+const Q = new URLSearchParams(location.search);
+const G = 9.81, DT = 1/240;
+const add = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], sb = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]], sc = (a, k) => [a[0]*k, a[1]*k, a[2]*k];
+const dt3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2], cr = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]), nz = a => { const l = len(a) || 1; return [a[0]/l, a[1]/l, a[2]/l]; };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const mv = (m, v) => [m[0]*v[0]+m[1]*v[1]+m[2]*v[2], m[3]*v[0]+m[4]*v[1]+m[5]*v[2], m[6]*v[0]+m[7]*v[1]+m[8]*v[2]];
+const mtv = (m, v) => [m[0]*v[0]+m[3]*v[1]+m[6]*v[2], m[1]*v[0]+m[4]*v[1]+m[7]*v[2], m[2]*v[0]+m[5]*v[1]+m[8]*v[2]];
+const mm = (a, b) => { const o = Array(9); for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) o[r*3+c] = a[r*3]*b[c] + a[r*3+1]*b[3+c] + a[r*3+2]*b[6+c]; return o; };
+const rotZ = t => [Math.cos(t), -Math.sin(t), 0, Math.sin(t), Math.cos(t), 0, 0, 0, 1];
+function orthon(m){   // Gram-Schmidt on the columns (body axes)
+  let x = nz([m[0], m[3], m[6]]), y = [m[1], m[4], m[7]]; y = nz(sb(y, sc(x, dt3(x, y)))); const z = cr(x, y);
+  return [x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2]]; }
+function expW(w, dt){ const th = len(w)*dt; if (th < 1e-9) return [1,0,0,0,1,0,0,0,1];
+  const k = nz(w), s = Math.sin(th), c = 1 - Math.cos(th), K = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], K2 = mm(K, K);
+  return [0,1,2,3,4,5,6,7,8].map(i => (i % 4 === 0 ? 1 : 0) + s*K[i] + c*K2[i]); }
+let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+const store = { get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }, set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+/* ---------- materials: flat light / mid / dark like the assembly view ---------- */
+const MT = hex => ({ l: hex, m: mix(hex, '#000000', .16), d: mix(hex, '#000000', .38) });
+const MAT = { grass: MT('#9fcf8a'), grass2: MT('#8cc078'), dirt: MT('#cfb88a'), wood: MT('#c99a5b'), bark: MT('#8a6440'), leaf: MT('#5fa86a'), leaf2: MT('#4b9460'),
+  hay: MT('#f0cf6a'), white: MT('#f6f3ea'), red: MT('#e2483d'), yellow: MT('#f4b829'), blue: MT('#5a82c6'), concrete: MT('#d8d3c6'), glass: MT('#9fc4d6'),
+  brick: MT('#d98a62'), mint: MT('#93d3b0'), dark: MT('#4a4642'), asphalt: MT('#8f8b84'), steel: MT('#c6ccce'), pink: MT('#f3a6bb'), rug: MT('#c9605a'), sofa: MT('#6f8fc8'), wall: MT('#efe6d2') };
+const SUN = nz([-.45, .35, .82]);
+const toneOf = (n, m) => { const d = dt3(n, SUN); return d > .5 ? m.l : d > -.05 ? m.m : m.d; };
+
+/* ---------- world objects: lists of convex faces with outward normals ---------- */
+function solid(faces, mat, opt = {}){
+  const all = faces.flat(), c = all.reduce((a, p) => add(a, sc(p, 1/all.length)), [0,0,0]);
+  const F = faces.map(p => { let n = newell(p); if (dt3(n, sb(p.reduce((a, q) => add(a, q), [0,0,0]).map(v => v/p.length), c)) < 0) n = sc(n, -1); return { p, n, mat: opt.mat2 && opt.mat2(p, n) || mat }; });
+  const mn = [0,1,2].map(i => Math.min(...all.map(p => p[i]))), mx = [0,1,2].map(i => Math.max(...all.map(p => p[i])));
+  return { faces: F, mn, mx, c: sc(add(mn, mx), .5), r: len(sb(mx, mn))/2, bg: !!opt.bg, gate: opt.gate };
+}
+function newell(q){ let x = 0, y = 0, z = 0; for (let i = 0; i < q.length; i++){ const a = q[i], b = q[(i+1) % q.length]; x += (a[1]-b[1])*(a[2]+b[2]); y += (a[2]-b[2])*(a[0]+b[0]); z += (a[0]-b[0])*(a[1]+b[1]); } return nz([x, y, z]); }
+function prismF(poly, z0, z1, bottom = false){ const n = poly.length, F = [poly.map(([x, y]) => [x, y, z1]).reverse()];
+  if (bottom) F.push(poly.map(([x, y]) => [x, y, z0]));
+  for (let i = 0; i < n; i++){ const a = poly[i], b = poly[(i+1) % n]; F.push([[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]]); }
+  return F; }
+const rectP = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+const circP = (x, y, r, n = 8, a0 = 0) => Array.from({ length:n }, (_, i) => { const a = a0 + i/n*2*Math.PI; return [x + r*Math.cos(a), y + r*Math.sin(a)]; });
+const boxO = (x0, y0, z0, x1, y1, z1, mat, opt) => solid(prismF(rectP(x0, y0, x1, y1), z0, z1, z0 > .01), mat, opt);
+const cylO = (x, y, z0, z1, r, mat, n = 8, opt) => solid(prismF(circP(x, y, r, n), z0, z1, z0 > .01), mat, opt);
+function coneO(x, y, z0, z1, r, mat, n = 8){ const base = circP(x, y, r, n).map(([u, v]) => [u, v, z0]), top = [x, y, z1], F = [];
+  for (let i = 0; i < n; i++) F.push([base[i], base[(i+1) % n], top]); F.push(base.slice().reverse()); return solid(F, mat); }
+// a box turned to angle a (rad) about z, centred (cx, cy)
+const rotBoxO = (cx, cy, a, l, w, z0, z1, mat, opt) => { const c = Math.cos(a), s = Math.sin(a);
+  return solid(prismF([[-l/2, -w/2], [l/2, -w/2], [l/2, w/2], [-l/2, w/2]].map(([u, v]) => [cx + u*c - v*s, cy + u*s + v*c]), z0, z1, z0 > .01), mat, opt); };
+
+/* ---------- environments ---------- */
+function gateObjs(W, gate, mat){   // a square gate: two posts, a top and a bottom bar, facing along angle a
+  const { c, a, w, h, t = .12 } = gate, ca = Math.cos(a), sa = Math.sin(a), out = [];
+  const piece = (u0, u1, z0, z1) => { const cx = c[0] - sa*(u0 + u1)/2, cy = c[1] + ca*(u0 + u1)/2; out.push(rotBoxO(cx, cy, a, t, u1 - u0, z0, z1, mat, { gate }));
+    W.col.push({ t:'obox', c:[cx, cy], a, hx: t/2, hy: (u1 - u0)/2, z0, z1 }); };
+  const zb = c[2] - h/2, zt = c[2] + h/2;
+  piece(-w/2 - t, -w/2, 0, zt + t); piece(w/2, w/2 + t, 0, zt + t); piece(-w/2, w/2, zt, zt + t); if (zb > .05) piece(-w/2, w/2, zb - t, zb);
+  return out; }
+function world(id){
+  seed = 11;
+  const W = { id, objs:[], col:[], decals:[], tufts:[], gates:[], sky:'#dfe8e6', haze:'#ece9df', ground:'#a9d394', far:320, spawn:{ p:[0, 0], yaw:0 }, pilot:[-6, -4, 1.6], hills:true };
+  const O = o => { W.objs.push(o); return o; }, colBox = (x0, y0, z0, x1, y1, z1) => W.col.push({ t:'box', mn:[x0, y0, z0], mx:[x1, y1, z1] });
+  const tree = (x, y, s = 1, alt = false) => { const h = 3.2*s;
+    O(cylO(x, y, 0, h*.45, .22*s, MAT.bark, 5)); O(coneO(x, y, h*.3, h*.85, 1.5*s, alt ? MAT.leaf2 : MAT.leaf, 7)); O(coneO(x, y, h*.62, h*1.25, 1.05*s, alt ? MAT.leaf : MAT.leaf2, 6));
+    W.col.push({ t:'cyl', x, y, r:.22*s, z0:0, z1:h*.45 }, { t:'sph', c:[x, y, h*.62], r:1.25*s }, { t:'sph', c:[x, y, h*.98], r:.8*s }); };
+  const tufts = (n, R, avoid = () => false) => { for (let i = 0; i < n; i++){ const x = (rnd()*2 - 1)*R, y = (rnd()*2 - 1)*R; if (!avoid(x, y)) W.tufts.push([x, y]); } };
+  const stripes = (R, w, col) => { for (let x = -R; x < R; x += 2*w) W.decals.push({ p: rectP(x, -R, x + w, R).map(([u, v]) => [u, v, 0]), col }); };
+  const pad = (x, y, s = 1) => { W.decals.push({ p: rectP(x - s, y - s, x + s, y + s).map(([u, v]) => [u, v, 0]), col:'#d8c49a', ink:true });
+    W.decals.push({ p: circP(x, y, s*.7, 16).map(([u, v]) => [u, v, 0]), col:'#efe3c4', ink:true }); };
+  const fence = R => { for (let i = -R; i <= R; i += 6) for (const [x, y] of [[i, -R], [i, R], [-R, i], [R, i]]){ O(boxO(x - .08, y - .08, 0, x + .08, y + .08, 1.2, MAT.wood)); colBox(x - .08, y - .08, 0, x + .08, y + .08, 1.2); }
+    for (const s of [-1, 1]){ O(boxO(-R, s*R - .04, .85, R, s*R + .04, 1, MAT.wood)); O(boxO(s*R - .04, -R, .85, s*R + .04, R, 1, MAT.wood)); colBox(-R, s*R - .04, .85, R, s*R + .04, 1); colBox(s*R - .04, -R, .85, s*R + .04, R, 1); } };
+  if (id === 'field' || id === 'course' || id === 'race'){
+    stripes(90, 6, '#b3da9e'); tufts(1400, 90, (x, y) => Math.abs(x) < 2 && Math.abs(y) < 2); pad(0, 0); fence(90);
+    for (const [x, y, s] of [[40, 30, 1.3], [-35, 45, 1.1], [55, -40, 1.5], [-60, -30, 1.2], [70, 60, 1.4], [-70, 70, 1]]) tree(x, y, s, rnd() > .5);
+  }
+  if (id === 'field'){
+    for (const [x, y] of [[14, 8], [16, 10.5], [20, -6], [-12, 14], [-16, -10], [9, -15]]){ O(cylO(x, y, 0, 1.2, .75, MAT.hay, 10)); W.col.push({ t:'cyl', x, y, r:.75, z0:0, z1:1.2 }); }
+    O(boxO(-30, -12, 0, -22, -4, 3.2, MAT.red)); colBox(-30, -12, 0, -22, -4, 3.2);
+    O(solid([[[-30, -12, 3.2], [-22, -12, 3.2], [-22, -8, 4.6], [-30, -8, 4.6]], [[-22, -4, 3.2], [-30, -4, 3.2], [-30, -8, 4.6], [-22, -8, 4.6]], [[-30, -12, 3.2], [-30, -8, 4.6], [-30, -4, 3.2]], [[-22, -4, 3.2], [-22, -8, 4.6], [-22, -12, 3.2]]], MAT.dark));
+    colBox(-30, -12, 3.2, -22, -4, 4.6);
+    O(cylO(8, 20, 0, 6, .06, MAT.steel, 5)); O(coneO(8, 20, 5.3, 6, .35, MAT.red, 6)); W.col.push({ t:'cyl', x:8, y:20, r:.06, z0:0, z1:6 });
+  }
+  if (id === 'course'){
+    W.spawn.yaw = 0;
+    for (let i = 0; i < 6; i++){ const x = 8 + i*5, y = (i % 2 ? 2 : -2); O(cylO(x, y, 0, 3, .1, i % 2 ? MAT.red : MAT.white, 6)); W.col.push({ t:'cyl', x, y, r:.1, z0:0, z1:3 }); }
+    const gs = [{ c:[45, 0, 1.6], a:0, w:2.4, h:2.4 }, { c:[60, 12, 3.5], a:Math.PI/2, w:2, h:2 }, { c:[50, 28, 1.2], a:Math.PI, w:2.6, h:1.6 }, { c:[30, 30, 5], a:Math.PI, w:2.4, h:2.4 }, { c:[12, 22, 1.5], a:-Math.PI*.75, w:2.4, h:2 }];
+    // a wall with a window, a tunnel, a high bar on poles
+    O(boxO(20, 26, 0, 20.3, 34, 8, MAT.brick)); colBox(20, 26, 0, 20.3, 34, 8);
+    O(boxO(30.5, 25, 0, 31, 28.5, 7, MAT.concrete)); O(boxO(30.5, 31.5, 0, 31, 35, 7, MAT.concrete)); O(boxO(30.5, 28.5, 0, 31, 31.5, 4, MAT.concrete)); O(boxO(30.5, 28.5, 6, 31, 31.5, 7, MAT.concrete));
+    colBox(30.5, 25, 0, 31, 28.5, 7); colBox(30.5, 31.5, 0, 31, 35, 7); colBox(30.5, 28.5, 0, 31, 31.5, 4); colBox(30.5, 28.5, 6, 31, 31.5, 7);
+    O(boxO(54, 26.6, 0, 58, 26.9, 2.2, MAT.blue)); O(boxO(54, 29.1, 0, 58, 29.4, 2.2, MAT.blue)); O(boxO(54, 26.6, 2.2, 58, 29.4, 2.5, MAT.blue));
+    colBox(54, 26.6, 0, 58, 26.9, 2.2); colBox(54, 29.1, 0, 58, 29.4, 2.2); colBox(54, 26.6, 2.2, 58, 29.4, 2.5);
+    gs.splice(2, 1, { c:[56, 28, 1.1], a:Math.PI, w:2.2, h:2.2, t:.05, hidden:true });
+    gs.splice(3, 1, { c:[30.75, 30, 5], a:Math.PI, w:3, h:2, t:.05, hidden:true });
+    W.gates = gs; gs.forEach(g => { if (!g.hidden) gateObjs(W, g, MAT.blue).forEach(O); });
+  }
+  if (id === 'race'){
+    const gs = [];
+    const path = [[18, 0, 0], [40, 6, .3], [58, 22, 1.2], [56, 44, 2.2], [34, 52, 3.1], [12, 44, 3.6], [-2, 26, 4.4], [4, 8, 5.6]];
+    path.forEach(([x, y, a], i) => gs.push({ c:[x, y, i === 4 ? 6 : 1.4], a, w: 2.4, h: 1.8 }));
+    O(boxO(32, 50.6, 0, 36, 53.4, 5, MAT.steel)); colBox(32, 50.6, 0, 36, 53.4, 5);
+    gs[4].c[2] = 6.1;
+    gs.forEach((g, i) => { const a = gs[(i + gs.length - 1) % gs.length].c, b = gs[(i + 1) % gs.length].c; g.a = Math.atan2(b[1] - a[1], b[0] - a[0]); });
+    W.gates = gs; gs.forEach(g => gateObjs(W, g, MAT.pink).forEach(O));
+    for (const [x, y] of [[26, 4], [48, 14], [64, 34], [24, 52], [4, 36]]){ O(cylO(x, y, 0, 3.5, .05, MAT.steel, 5)); O(boxO(x - .02, y, 2.5, x + .02, y + 1, 3.4, MAT.yellow)); W.col.push({ t:'cyl', x, y, r:.06, z0:0, z1:3.5 }); }
+  }
+  if (id === 'city'){
+    W.ground = '#b7b2a6'; W.sky = '#dde6ea'; W.hills = false; W.spawn = { p:[0, 0], yaw:0 }; W.pilot = [-5, -6, 1.6];
+    const block = 34, road = 12;
+    for (let i = -3; i <= 3; i++){ W.decals.push({ p: rectP(i*(block + road) - road/2, -170, i*(block + road) + road/2, 170).map(([u, v]) => [u, v, 0]), col:'#8f8b84' });
+      W.decals.push({ p: rectP(-170, i*(block + road) - road/2, 170, i*(block + road) + road/2).map(([u, v]) => [u, v, 0]), col:'#8f8b84' });
+      for (let k = -170; k < 170; k += 6){ W.decals.push({ p: rectP(i*(block + road) - .08, k, i*(block + road) + .08, k + 3).map(([u, v]) => [u, v, .01]), col:'#f2efe7' });
+        W.decals.push({ p: rectP(k, i*(block + road) - .08, k + 3, i*(block + road) + .08).map(([u, v]) => [u, v, .01]), col:'#f2efe7' }); } }
+    const cols = [MAT.brick, MAT.concrete, MAT.white, MAT.mint, MAT.yellow, MAT.blue];
+    for (let i = -3; i < 3; i++) for (let j = -3; j < 3; j++){
+      const x0 = i*(block + road) + road/2, y0 = j*(block + road) + road/2;
+      for (const [u, v] of [[0, 0], [block/2 + 1, 0], [0, block/2 + 1], [block/2 + 1, block/2 + 1]]){
+        if (rnd() < .15) { tree(x0 + u + 8, y0 + v + 8, 1.4, rnd() > .5); continue; }
+        const bx0 = x0 + u + 1.5, by0 = y0 + v + 1.5, bx1 = bx0 + block/2 - 4, by1 = by0 + block/2 - 4, h = 6 + Math.floor(rnd()*9)*4, m = cols[Math.floor(rnd()*cols.length)];
+        const bo = O(boxO(bx0, by0, 0, bx1, by1, h, m)); colBox(bx0, by0, 0, bx1, by1, h);
+        // window bands on every face
+        // window bands: faces wound counter-clockwise round the building, so their normals face out
+        for (let z = 3; z < h - 1; z += 4){ for (const [a0, a1] of [[[bx0, by0 - .02], [bx1, by0 - .02]], [[bx1 + .02, by0], [bx1 + .02, by1]], [[bx1, by1 + .02], [bx0, by1 + .02]], [[bx0 - .02, by1], [bx0 - .02, by0]]]){
+          const dx = (a1[0] - a0[0]), dy = (a1[1] - a0[1]);
+          // part of the building's own face list, so they always draw just after the wall they sit on
+          const wp = [[a0[0] + dx*.08, a0[1] + dy*.08, z], [a0[0] + dx*.92, a0[1] + dy*.92, z], [a0[0] + dx*.92, a0[1] + dy*.92, z + 1.4], [a0[0] + dx*.08, a0[1] + dy*.08, z + 1.4]];
+          bo.faces.push({ p: wp, n: newell(wp), mat: MAT.glass }); } }
+        if (h > 14) { O(boxO(bx0 + 3, by0 + 3, h, bx0 + 6, by0 + 5, h + 1.5, MAT.steel)); colBox(bx0 + 3, by0 + 3, h, bx0 + 6, by0 + 5, h + 1.5); }
+      } }
+    tufts(500, 160);
+  }
+  if (id === 'forest'){
+    W.ground = '#8fbf7a'; W.far = 130; W.haze = '#e2e8da';
+    tufts(1800, 80, (x, y) => false);
+    for (let i = 0; i < 170; i++){ const x = (rnd()*2 - 1)*85, y = (rnd()*2 - 1)*85;
+      if (Math.hypot(x, y) < 9 || (Math.abs(y - x*.3) < 3.5 && x > 0)) continue; tree(x, y, .8 + rnd()*1.1, rnd() > .5); }
+    for (let i = 0; i < 12; i++){ const x = (rnd()*2 - 1)*70, y = (rnd()*2 - 1)*70; if (Math.hypot(x, y) < 9) continue; const r = .4 + rnd()*.8; O(cylO(x, y, 0, r*1.1, r, MAT.concrete, 6)); W.col.push({ t:'cyl', x, y, r, z0:0, z1:r*1.1 }); }
+    O(rotBoxO(6, -5, .4, 7, .5, 0, .5, MAT.bark)); W.col.push({ t:'obox', c:[6, -5], a:.4, hx:3.5, hy:.25, z0:0, z1:.5 });
+    W.decals.push({ p: [[0, -1.6, 0], [90, 25.4, 0], [90, 29.4, 0], [0, 1.6, 0]], col:'#c8b48a' });
+    pad(0, 0);
+  }
+  if (id === 'room'){
+    W.ground = '#d9a86c'; W.sky = '#efe6d2'; W.hills = false; W.far = 60; W.haze = '#efe6d2'; W.spawn = { p:[0, 0], yaw:0 }; W.pilot = [-2.4, -1.8, 1.2];
+    const RX = 3.2, RY = 2.6, RZ = 2.6;
+    for (let x = -RX; x < RX; x += .18) W.decals.push({ p: rectP(x, -RY, x + .012, RY).map(([u, v]) => [u, v, .001]), col:'#b98a52' });
+    const wall = (x0, y0, z0, x1, y1, z1, m) => { O(boxO(x0, y0, z0, x1, y1, z1, m, { bg:true })); colBox(x0, y0, z0, x1, y1, z1); };
+    wall(-RX - .2, -RY - .2, 0, RX + .2, -RY, RZ, MAT.wall); wall(-RX - .2, RY, 0, RX + .2, RY + .2, RZ, MAT.wall);
+    wall(-RX - .2, -RY, 0, -RX, RY, RZ, MAT.mint); wall(RX, -RY, 0, RX + .2, RY, RZ, MAT.wall); wall(-RX - .2, -RY - .2, RZ, RX + .2, RY + .2, RZ + .2, MAT.white);
+    const furn = (x0, y0, z0, x1, y1, z1, m) => { O(boxO(x0, y0, z0, x1, y1, z1, m)); colBox(x0, y0, z0, x1, y1, z1); };
+    W.decals.push({ p: rectP(-1.2, -1, 1.2, 1).map(([u, v]) => [u, v, .003]), col:'#c9605a', ink:true });
+    furn(-.5, 1.2, 0, 1.5, 2.4, .45, MAT.sofa); furn(-.5, 2.1, .45, 1.5, 2.4, .9, MAT.sofa); furn(-.7, 1.2, 0, -.5, 2.4, .65, MAT.sofa); furn(1.5, 1.2, 0, 1.7, 2.4, .65, MAT.sofa);
+    furn(-.4, -.4, .38, .6, .3, .44, MAT.wood); for (const [x, y] of [[-.35, -.35], [.55, -.35], [-.35, .25], [.55, .25]]) furn(x - .03, y - .03, 0, x + .03, y + .03, .38, MAT.bark);
+    furn(2.6, -2.5, 0, 3.15, -.6, 1.9, MAT.wood); for (const z of [.5, 1, 1.45]) furn(2.55, -2.5, z, 2.6, -.6, z + .03, MAT.bark);
+    furn(-3.1, -2.5, 0, -2.4, -2, .75, MAT.white); furn(-2.9, -2.4, .75, -2.55, -2.1, 1.2, MAT.yellow);
+    O(cylO(-2.6, 1.9, 0, .35, .25, MAT.red, 8)); O(coneO(-2.6, 1.9, .35, 1.4, .3, MAT.leaf, 7)); W.col.push({ t:'cyl', x:-2.6, y:1.9, r:.3, z0:0, z1:1.4 });
+    // two small gates to fly through
+    W.gates = [{ c:[1.6, -1.2, 1.3], a:0, w:.6, h:.6, t:.04 }, { c:[-1.2, -1.8, 1.6], a:Math.PI, w:.6, h:.6, t:.04 }];
+    W.gates.forEach(g => gateObjs(W, g, MAT.pink).forEach(o => { O(o); }));
+    W.spawn.p = [-1.8, .2];
+  }
+  if (W.hills){ const n = 28; for (let i = 0; i < n; i++){ const a0 = i/n*2*Math.PI, a1 = (i + 1)/n*2*Math.PI, R = 600, h = 25 + 35*Math.abs(Math.sin(i*1.7));
+    O(solid([[[R*Math.cos(a0), R*Math.sin(a0), 0], [R*Math.cos(a1), R*Math.sin(a1), 0], [R*.98*Math.cos((a0 + a1)/2), R*.98*Math.sin((a0 + a1)/2), h]]], MAT.leaf2, { bg:true })); }
+    for (const o of W.objs) if (o.bg && o.faces.length === 1){ const fc = o.faces[0]; if (dt3(fc.n, nz([-o.c[0], -o.c[1], 0])) < 0) fc.n = sc(fc.n, -1); } }
+  return W;
+}
+const ENVS = [['field', 'Open field'], ['course', 'Obstacle course'], ['race', 'Race gates'], ['city', 'City blocks'], ['forest', 'Forest'], ['room', 'Living room (whoops)']];
+
+/* ---------- the drone: flight model from the same geometry as the assembly view ---------- */
+function dronePos(D){ const g = D.geo;
+  if (g.style === 'shell') return [[88, 104], [-86, 98], [-86, -98], [88, -104]].map(([x, y]) => [x/1000, y/1000]);
+  return g.motors.map(m => [g.arm*Math.cos(m.a*Math.PI/180)/1000, g.arm*Math.sin(m.a*Math.PI/180)/1000]); }
+function buildCraft(D){
+  const g = D.geo, F = D.fly, k = .001, pal = PALS[D.pal] ? MT(PALS[D.pal].l) : MAT.red, parts = [];
+  const pos = dronePos(D), n = pos.length, carbon = MT('#4a4642'), batt = MT('#3f9fd8');
+  const put = (o, part) => parts.push({ o, part });
+  let zP = 0, h = 0, zCom = 0;
+  if (g.style === 'xplate'){
+    const L = g.plateL*k, Wd = g.plateW*k, T0 = (12 + g.standH)*k; zP = (10 + g.motorR*.22 + g.motorH + 1.2)*k; h = T0 + g.batt[2]*k;
+    put(boxO(-L/2, -Wd/2, .0025, L/2, Wd/2, .005, carbon), 'body');
+    pos.forEach(([x, y], i) => put(rotBoxO(x/2, y/2, Math.atan2(y, x), Math.hypot(x, y), g.armW*k, .005, .01, carbon), 'arm' + i));
+    put(boxO(-.02, -.018, .012, .018, .018, T0, MT('#3f8f5a')), 'body'); put(boxO(-L/2, -Wd/2, T0, L/2, Wd/2, T0 + .0025, carbon), 'body');
+    put(boxO(L/2 - .021, -.0095, .017, L/2 - .002, .0095, .036, MT('#2b2826')), 'body');
+    const [bl, bw, bh] = g.batt.map(v => v*k), x1 = g.action ? L/2 - .036 : bl/2;
+    put(boxO(x1 - bl, -bw/2, T0 + .0025, x1, bw/2, T0 + .0025 + bh, batt), 'batt');
+    if (g.action) put(boxO(L/2 - .032, -.035, T0 + .008, L/2 - .004, .035, T0 + .054, MT('#2b2826')), 'body');
+    zCom = T0*.6;
+  } else if (g.style === 'duct'){
+    const wh = !!g.whoop, z1 = (wh ? 8.5 : 5.5)*k, dR = g.ductR*k, dH = Math.max(g.ductH, (wh ? 8.5 : 5.5) + g.motorR*.22 + g.motorH + 5)*k;
+    zP = ((wh ? 8.5 : 5.5) + g.motorR*.22 + g.motorH + 1)*k; h = wh ? .02 : .06;
+    put(boxO(-(wh ? .015 : .032), -(wh ? .011 : .02), z1 - .002, wh ? .015 : .032, wh ? .011 : .02, z1, wh ? pal : carbon), 'body');
+    pos.forEach(([x, y], i) => { const segs = 10; for (let s = 0; s < segs; s++){ const a0 = s/segs*2*Math.PI, a1 = (s + 1)/segs*2*Math.PI, r0 = dR, r1 = dR + (wh ? .0012 : .0025);
+      put(solid(prismF([[x + r0*Math.cos(a0), y + r0*Math.sin(a0)], [x + r1*Math.cos(a0), y + r1*Math.sin(a0)], [x + r1*Math.cos(a1), y + r1*Math.sin(a1)], [x + r0*Math.cos(a1), y + r0*Math.sin(a1)]], 0, dH, true), pal), 'arm' + i); }
+      put(rotBoxO(x/2, y/2, Math.atan2(y, x), Math.hypot(x, y), g.armW*k, z1 - .002, z1, wh ? pal : carbon), 'arm' + i); });
+    put(boxO(-(wh ? .012 : .024), -(wh ? .009 : .017), z1, wh ? .014 : .022, wh ? .009 : .017, wh ? z1 + .01 : .031, wh ? MAT.white : pal), 'body');
+    const [bl, bw, bh] = g.batt.map(v => v*k);
+    put(wh ? boxO(-bl/2, -bw/2, z1 - .002 - bh, bl/2, bw/2, z1 - .002, batt) : boxO(-bl/2 - .004, -bw/2, .031, bl/2 - .004, bw/2, .031 + bh, batt), 'batt');
+    zCom = wh ? z1 : .02;
+  } else if (g.style === 'shell'){
+    put(solid(prismF([[-.072, -.031], [.062, -.031], [.078, -.018], [.078, .018], [.062, .031], [-.072, .031]], .01, .056, true), MAT.white, { mat2: (p, n) => n[2] > .5 ? pal : null }), 'body');
+    put(boxO(.08, -.012, .005, .102, .012, .025, MT('#2b2826')), 'body');
+    const mz = [.04, .026, .026, .04];
+    pos.forEach(([x, y], i) => { const front = x > 0, hx = front ? .054 : -.064, hz = front ? .03 : .016;
+      put(rotBoxO((x + hx)/2, (y + Math.sign(y)*.029)/2, Math.atan2(y - Math.sign(y)*.029, x - hx), Math.hypot(x - hx, y - Math.sign(y)*.029), .01, hz - .005, hz + .005, MAT.white), 'arm' + i);
+      put(cylO(x, y, front ? .026 : 0, mz[i], .0095, MAT.white, 8), 'arm' + i); if (front) put(cylO(x, y, 0, .026, .0025, MAT.white, 5), 'arm' + i); });
+    zP = .052; h = .06; zCom = .028;
+  } else {
+    const Rp = g.plateR*k, kk = g.plateR/165, Gh = g.gearH*k, zt = Gh + .0165*kk; zP = Gh + (31*kk + g.motorR*.87 + 3)*k; h = Gh + .2*kk;
+    put(cylO(0, 0, Gh, Gh + .031*kk, Rp, carbon, 12), 'body'); put(cylO(0, 0, Gh + .031*kk, Gh + .031*kk + .4*Rp*.6, .55*Rp, pal, 10), 'body');
+    pos.forEach(([x, y], i) => put(rotBoxO(x*.55, y*.55, Math.atan2(y, x), Math.hypot(x, y)*.9, .025*kk, zt - .0125*kk, zt + .0125*kk, carbon), 'arm' + i));
+    for (const sy of [-1, 1]){ put(boxO(-1.7*Rp, sy*1.4*Rp - .008, 0, 1.7*Rp, sy*1.4*Rp + .008, .016*kk, carbon), 'gear');
+      for (const sx of [-1, 1]) put(rotBoxO(sx*.8*Rp, sy*1.0*Rp, Math.atan2(.78*Rp*sy, .73*Rp*sx), .9*Rp, .014, .016, Gh, carbon), 'gear');
+      put(boxO(-.62*Rp, sy > 0 ? .05*Rp : -.62*Rp, Gh - .158*kk, .62*Rp, sy > 0 ? .62*Rp : -.05*Rp, Gh - .088*kk, batt), 'batt'); }
+    put(boxO(1.2*Rp - .07*kk, -.062*kk, Gh - .172*kk, 1.2*Rp + .07*kk, .062*kk, Gh - .07*kk, g.gimbal === 'cine' ? MAT.red : MAT.white), 'body');
+    zCom = Gh;
+  }
+  const mR = g.motorR*k;
+  pos.forEach(([x, y], i) => { const zb = g.style === 'shell' ? [.04, .026, .026, .04][i] : zP - (g.motorH || g.motorR*.65)*k - .002;
+    put(cylO(x, y, zb, zP - .001, mR, pal, 8), 'arm' + i); });
+  const zPs = pos.map((_, i) => g.style === 'shell' ? [.052, .038, .038, .052][i] : zP);
+  // move the origin to the centre of mass
+  for (const p of parts) for (const fc of p.o.faces) for (const q of fc.p) q[2] -= zCom;
+  for (const p of parts){ p.o.mn[2] -= zCom; p.o.mx[2] -= zCom; p.o.c[2] -= zCom; }
+  const armR = Math.max(...pos.map(([x, y]) => Math.hypot(x, y)));
+  const I = F.mass*armR*armR*.42;
+  return { D, parts, n, pos, dirs: g.motors.map(m => m.dir), props: pos.map(([x, y], i) => ({ x, y, z: zPs[i] - zCom + .002, r: g.propR*k, dir: g.motors[i].dir, col: g.propCol })),
+    foot: zCom, rad: armR + (g.style === 'duct' ? (g.ductR + 3)*k : g.propR*k*.8), I: [I, I, I*1.7], h };
+}
+
+/* ---------- settings ---------- */
+const SET = store.get('dl-flight', {});
+const setDefault = (k, v) => { if (SET[k] == null) SET[k] = v; };
+setDefault('env', 'field'); setDefault('wind', 0); setDefault('stickMode', 2); setDefault('sound', true); setDefault('view', 'chase'); setDefault('map', null); setDefault('rates', {});
+const saveSet = () => store.set('dl-flight', SET);
+
+/* ---------- state ---------- */
+let D = dlDrone(Q.get('d') || SET.drone || 'freestyle'); if (!D.ready) D = DL_DRONES[0];
+let CR, W, S;
+const modeNames = { acro:'Acro', angle:'Angle', gps:'GPS', sport:'Sport', cine:'Cine' };
+function rates(){ const r = SET.rates[D.id] || {}; return { c: r.c ?? D.fly.rate[0], m: r.m ?? D.fly.rate[1], e: r.e ?? D.fly.rate[2], y: r.y ?? D.fly.yawRate[1], up: r.up ?? D.fly.uptilt, fov: r.fov ?? (D.fly.cam === 'fpv' ? 120 : 84) }; }
+function newState(){
+  const sp = W.spawn, yaw = sp.yaw;
+  return { pos:[sp.p[0], sp.p[1], CR.foot + surfaceAt(sp.p[0], sp.p[1], .1)], vel:[0,0,0], R: rotZ(yaw), w:[0,0,0], T: Array(CR.n).fill(0), Tc: Array(CR.n).fill(0), iErr:[0,0,0],
+    armed:false, crashed:null, used:0, cellV:4.2, amps:0, t:0, flightT:0, ground:true, mode: S && D.fly.modes.includes(S.mode) ? S.mode : D.fly.modes[0], spin: Array(CR.n).fill(0),
+    debris:[], gate:0, lapT:null, lapStart:null, best: store.get('dl-best-' + W.id + '-' + D.id, null), lastLap:null, crashes: S ? S.crashes : 0, msg:'', msgT:0, paused:false, armSwitchSeen:false, landT:0 };
+}
+function load(){
+  CR = buildCraft(D); W = world(SET.env); S = newState(); SET.drone = D.id; saveSet();
+  document.getElementById('bBuild').href = 'drone-assembly.html?d=' + D.id;
+  syncUI(); }
+
+/* ---------- surfaces and collisions ---------- */
+function surfaceAt(x, y, zMax){ let h = 0;
+  for (const c of W.col) if (c.t === 'box' && x >= c.mn[0] && x <= c.mx[0] && y >= c.mn[1] && y <= c.mx[1] && c.mx[2] <= zMax + .02 && c.mx[2] > h) h = c.mx[2];
+  return h; }
+function closest(c, p){
+  if (c.t === 'box') return [clamp(p[0], c.mn[0], c.mx[0]), clamp(p[1], c.mn[1], c.mx[1]), clamp(p[2], c.mn[2], c.mx[2])];
+  if (c.t === 'cyl'){ const dx = p[0] - c.x, dy = p[1] - c.y, d = Math.hypot(dx, dy) || 1, r = Math.min(d, c.r); return [c.x + dx/d*r, c.y + dy/d*r, clamp(p[2], c.z0, c.z1)]; }
+  if (c.t === 'sph'){ const d = sb(p, c.c), l = len(d) || 1; return add(c.c, sc(d, Math.min(1, c.r/l))); }
+  const ca = Math.cos(c.a), sa = Math.sin(c.a), dx = p[0] - c.c[0], dy = p[1] - c.c[1], u = clamp(dx*ca + dy*sa, -c.hx, c.hx), v = clamp(-dx*sa + dy*ca, -c.hy, c.hy);
+  return [c.c[0] + u*ca - v*sa, c.c[1] + u*sa + v*ca, clamp(p[2], c.z0, c.z1)]; }
+const colName = c => c.t === 'sph' ? 'a tree' : c.t === 'cyl' ? (W.id === 'forest' || W.id === 'field' ? 'a trunk' : 'a pole') : c.t === 'obox' ? 'a gate' : W.id === 'city' ? 'a building' : W.id === 'room' ? 'the furniture' : 'an obstacle';
+
+/* ---------- input: keyboard, gamepad / radio, on-screen sticks ---------- */
+const keys = new Set();
+const stick = { L:[0, -1], R:[0, 0] };          // [x, y] in -1..1 (y up); L = throttle/yaw in Mode 2
+const kb = { L:[0, -1], R:[0, 0] };
+const pads = { L:null, R:null };              // active pointer per pad
+let gp = null, gpArmPrev = false, gpUsed = false;
+const defMap = id => /(edgetx|opentx|frsky|radiomaster|jumper|tbs|taranis|betaflight|radio|joystick|tx16|boxer|zorro|pocket)/i.test(id)
+  ? { roll:0, pitch:1, thr:2, yaw:3, inv:{}, arm:'a4' } : { roll:2, pitch:3, thr:1, yaw:0, inv:{ thr:true, pitch:true }, arm:'b0' };
+function readInput(dt){
+  const pads0 = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+  gp = pads0.find(p => p.axes.length >= 4) || null;
+  const springThr = S.mode === 'gps' || S.mode === 'sport' || S.mode === 'cine';
+  // keyboard: sticks ramp like a thumb would; throttle stays put in acro / angle
+  const tgt = (a, b) => (keys.has(a) ? 1 : 0) - (keys.has(b) ? 1 : 0), ramp = (v, t, r) => v + clamp(t - v, -r*dt, r*dt);
+  const ky = tgt('w', 's');
+  kb.L[1] = springThr ? ramp(kb.L[1], ky, ky ? 3 : 5) : clamp(kb.L[1] + ky*dt*.9, -1, 1);
+  kb.L[0] = ramp(kb.L[0], tgt('d', 'a'), tgt('d', 'a') ? 3.5 : 6);
+  kb.R[0] = ramp(kb.R[0], tgt('arrowright', 'arrowleft') || tgt('l', 'j'), 3.5);
+  kb.R[1] = ramp(kb.R[1], tgt('arrowup', 'arrowdown') || tgt('i', 'k'), 3.5);
+  let L = kb.L.slice(), R = kb.R.slice();
+  if (gp){ const m = SET.map || defMap(gp.id), ax = (k) => { const v = gp.axes[m[k]] || 0; return (m.inv && m.inv[k]) ? -v : v; };
+    if (['roll', 'pitch', 'yaw'].some(k => Math.abs(ax(k)) > .15)) gpUsed = true;
+    if (gpUsed){ L = [ax('yaw'), ax('thr')]; R = [ax('roll'), ax('pitch')]; }
+    const a = m.arm || 'b0', on = a[0] === 'a' ? (gp.axes[+a.slice(1)] || -1) > .3 : !!(gp.buttons[+a.slice(1)] && gp.buttons[+a.slice(1)].pressed);
+    if (a[0] === 'a'){ if (!on) S.armSwitchSeen = true; if (on && !S.armed && !S.crashed && S.armSwitchSeen){ tryArm(); if (!S.armed) S.armSwitchSeen = false; } if (!on && S.armed) disarm(); }
+    else { if (on && !gpArmPrev) S.armed ? disarm() : tryArm(); }
+    gpArmPrev = on;
+  } else gpUsed = false;
+  // on-screen pads: their last values persist (padMem); a key press hands control back to the keyboard
+  for (const side of ['L', 'R']) if (pads[side]) padMem[side] = pads[side].v.slice();
+  if (keys.size) padMem.used = false;
+  if (padMem.used && !gpUsed){ const a = padMem.L, b = padMem.R;
+    if (SET.stickMode == 1){ L = [a[0], b[1]]; R = [b[0], a[1]]; } else { L = a.slice(); R = b.slice(); } }
+  stick.L = L.map(v => clamp(v, -1, 1)); stick.R = R.map(v => clamp(v, -1, 1));
+}
+const padMem = { L:[0, -1], R:[0, 0], used:false };
+
+/* ---------- arming, reset, crash ---------- */
+function flash(msg, t = 2.2){ S.msg = msg; S.msgT = t; }
+function tryArm(){
+  if (S.crashed) return flash('Crashed: press R (or Reset) for a fresh drone');
+  const thrLow = S.mode === 'acro' || S.mode === 'angle' ? stick.L[1] < -.9 : true;
+  const tilt = Math.acos(clamp(S.R[8], -1, 1))*180/Math.PI;
+  if (!thrLow) return flash('Arming blocked: throttle not low. Pull the throttle stick all the way down.');
+  if (tilt > 25) return flash('Arming blocked: not level');
+  S.armed = true; S.iErr = [0,0,0]; audioOn(); flash(S.mode === 'acro' ? 'ARMED: props spinning. Acro mode: nothing levels it for you.' : 'ARMED', 1.6);
+}
+function disarm(){ S.armed = false; }
+function reset(){ const keep = S; S = newState(); S.crashes = keep.crashes; S.best = keep.best; padMem.L[1] = -1; kb.L[1] = -1; syncUI(); }
+function crash(why, impact){
+  if (S.crashed) return;
+  S.crashed = why; S.armed = false; S.crashes++; flash('', 0);
+  // the drone breaks into its parts, each flying off with the body's motion plus a kick
+  S.debris = CR.parts.reduce((acc, p) => { const g = acc.find(d => d.part === p.part); if (g) g.objs.push(p.o); else acc.push({ part: p.part, objs:[p.o] }); return acc; }, [])
+    .map(d => ({ objs: d.objs, pos: S.pos.slice(), R: S.R.slice(), vel: add(sc(S.vel, .45), [(rnd() - .5)*impact*.6, (rnd() - .5)*impact*.6, rnd()*impact*.5]), w: [(rnd() - .5)*20, (rnd() - .5)*20, (rnd() - .5)*20], rest:false }));
+}
+
+/* ---------- physics + flight controller ---------- */
+const actual = (x, c, m, e) => { const ax = Math.abs(x), expof = ax*(Math.pow(x, 5)*e + x*(1 - e)); return (x*c + Math.max(0, m - c)*expof)*Math.PI/180; };
+const dz = (v, d = .02) => Math.abs(v) < d ? 0 : (v - Math.sign(v)*d)/(1 - d);
+let windT = 0;
+function step(dt){
+  const F = D.fly, m = F.mass, n = CR.n, Tmax = F.twr*m*G/n, rt = rates();
+  S.t += dt; windT += dt;
+  if (S.crashed){ stepDebris(dt); return; }
+  const R = S.R, bz = [R[2], R[5], R[8]], hd = Math.atan2(R[3], R[0]), hf = [Math.cos(hd), Math.sin(hd), 0], hl = [-Math.sin(hd), Math.cos(hd), 0];
+  // battery: open-circuit voltage falls with charge, sags with current (internal resistance)
+  const soc = clamp(1 - S.used/F.mAh, 0, 1), ocv = 3.45 + .75*soc - (soc < .12 ? (.12 - soc)*4 : 0), Rc = 5.2/F.mAh;
+  S.cellV = Math.max(2.8, ocv - S.amps*Rc); const vf = clamp(Math.pow(S.cellV/4.1, 2), .2, 1.05), Tl = Tmax*vf;
+  // --- the flight controller ---
+  const mode = S.mode, gpsM = mode === 'gps' || mode === 'sport' || mode === 'cine';
+  const yawRate = -actual(dz(stick.L[0]), Math.min(rt.y*.3, 200), rt.y, .3) * (mode === 'cine' ? .4 : 1);
+  let wd = [0, 0, yawRate], Tc = 0;
+  if (mode === 'acro'){ wd[0] = actual(dz(stick.R[0]), rt.c, rt.m, rt.e); wd[1] = actual(dz(stick.R[1]), rt.c, rt.m, rt.e); }
+  let zd = null;
+  if (mode === 'angle'){ const lim = 55*Math.PI/180, th = dz(stick.R[1])*lim, ph = dz(stick.R[0])*lim; zd = nz(add([0, 0, 1], add(sc(hf, Math.tan(th)), sc(hl, -Math.tan(ph))))); }
+  if (gpsM){ const vmax = mode === 'sport' ? 16 : mode === 'cine' ? 3 : 10, tmax = (mode === 'sport' ? 35 : mode === 'cine' ? 15 : 25)*Math.PI/180;
+    const vdes = add(sc(hf, dz(stick.R[1], .06)*vmax), sc(hl, -dz(stick.R[0], .06)*vmax)), w0 = wind();
+    let a = [(vdes[0] - S.vel[0])*1.6, (vdes[1] - S.vel[1])*1.6]; const am = Math.hypot(a[0], a[1]), amax = G*Math.tan(tmax); if (am > amax) a = [a[0]*amax/am, a[1]*amax/am];
+    // feed-forward the wind and drag the drone must lean into to hold its speed
+    const vrel = sb(S.vel, w0), sp = len(vrel), fd = [F.kd*sp*vrel[0]/m, F.kd*sp*vrel[1]/m]; a = [a[0] + fd[0], a[1] + fd[1]];
+    zd = nz([a[0]/G, a[1]/G, 1]);
+    const climb = dz(stick.L[1], .1)*(mode === 'sport' ? 5 : mode === 'cine' ? 1.5 : 3), az = clamp((climb - S.vel[2])*3, -G*.8, G*1.5);
+    Tc = m*(G + az)/Math.max(.5, bz[2]);
+    if (S.ground && climb <= 0){ Tc = 0; S.landT += dt; if (S.landT > 1 && stick.L[1] < -.6 && S.armed){ disarm(); flash('Landed and disarmed', 1.4); } } else S.landT = 0;
+  }
+  if (zd){ const e = mtv(R, cr(bz, zd)), ka = D.fly.tau > .1 ? 3.2 : 7; wd[0] = clamp(e[0]*ka, -rt.m*Math.PI/180, rt.m*Math.PI/180); wd[1] = clamp(e[1]*ka, -rt.m*Math.PI/180, rt.m*Math.PI/180); }
+  if (!gpsM){ const thr = (stick.L[1] + 1)/2; Tc = n*Tl*(.035 + .965*Math.pow(thr, 1.6)); }
+  // rate loop: torque = inertia x (P x rate error + I x accumulated error); the motors' own lag limits how fast it can be
+  const kp = Math.min(60, .42/F.tau), ki = kp*.6;
+  const ew = sb(wd, S.w); if (S.armed && !S.ground) S.iErr = S.iErr.map((v, i) => clamp(v + ew[i]*dt, -.5, .5)); else S.iErr = [0,0,0];
+  const tq = [0, 1, 2].map(i => CR.I[i]*(kp*ew[i] + ki*S.iErr[i]));
+  // mixer: each motor gets throttle share + roll + pitch + yaw shares
+  const sy2 = CR.pos.reduce((a, p) => a + p[1]*p[1], 0), sx2 = CR.pos.reduce((a, p) => a + p[0]*p[0], 0);
+  let cmd = CR.pos.map(([x, y], i) => Tc/n + tq[0]*y/sy2 - tq[1]*x/sx2 + tq[2]*CR.dirs[i]/(F.kQ*n));
+  // airmode-style clipping: shift the whole set to fit, keeping the differences (attitude) when possible
+  const hi = Math.max(...cmd), lo = Math.min(...cmd);
+  if (hi > Tl) cmd = cmd.map(v => v - (hi - Tl)); if (Math.min(...cmd) < 0 && hi - lo < Tl) cmd = cmd.map(v => v - Math.min(0, lo));
+  const idle = .035*Tl*(gpsM ? 1 : 0);
+  cmd = cmd.map(v => S.armed ? clamp(v, gpsM ? (S.ground && Tc === 0 ? idle : 0) : .035*Tl*.3, Tl) : 0);
+  if (soc <= 0) { cmd = cmd.map(() => 0); if (S.armed){ flash('Battery empty: the ESCs shut down', 3); } }
+  S.Tc = cmd;
+  const a = Math.min(1, dt/F.tau); S.T = S.T.map((t, i) => t + (cmd[i] - t)*a);
+  // --- forces and torques ---
+  const Tsum = S.T.reduce((x, y) => x + y, 0), w0 = wind(), vrel = sb(S.vel, w0), sp = len(vrel);
+  const Fw = add(sc(bz, Tsum), add([0, 0, -m*G], add(sc(vrel, -F.kd*sp), sc(vrel, -m*.08))));
+  let tau = [0, 0, 0]; CR.pos.forEach(([x, y], i) => { tau[0] += y*S.T[i]; tau[1] -= x*S.T[i]; tau[2] += CR.dirs[i]*F.kQ*S.T[i]; });
+  tau = sb(tau, sc(S.w, CR.I[0]*.4));                       // rotor and air damping
+  const Iw = S.w.map((v, i) => v*CR.I[i]), gyro = cr(S.w, Iw);
+  const alpha = [0, 1, 2].map(i => (tau[i] - gyro[i])/CR.I[i]);
+  S.vel = add(S.vel, sc(Fw, dt/m)); S.w = add(S.w, sc(alpha, dt));
+  const prev = S.pos.slice(); S.pos = add(S.pos, sc(S.vel, dt)); S.R = orthon(mm(S.R, expW(S.w, dt)));
+  S.amps = .4 + F.Imax*Math.pow(Tsum/(n*Tmax), 1.3); if (S.armed) { S.used += S.amps*dt/3.6; S.flightT += dt; }
+  S.spin = S.spin.map((v, i) => v + Math.sqrt(Math.max(0, S.T[i])/Tmax)*dt*60);
+  collide(dt, prev);
+  gates(prev);
+}
+function wind(){ if (!SET.wind) return [0, 0, 0]; const t = windT, base = SET.wind == 1 ? 2.5 : 4.5, g = SET.wind == 2 ? 1 + .9*Math.sin(t*.7)*Math.sin(t*1.9 + 1) : 1 + .15*Math.sin(t*.5);
+  return [base*g*.8, base*g*.6, SET.wind == 2 ? .6*Math.sin(t*2.3) : 0]; }
+function collide(dt, prev){
+  const F = D.fly, p = S.pos, sh = surfaceAt(p[0], p[1], p[2] - CR.foot + .05);
+  S.ground = false;
+  if (p[2] - CR.foot <= sh){
+    const vn = -S.vel[2], tilt = Math.acos(clamp(S.R[8], -1, 1))*180/Math.PI, hs = Math.hypot(S.vel[0], S.vel[1]);
+    if (vn > F.crashV) return crash(`Hit the ${sh > 0 ? 'top of ' + (W.id === 'room' ? 'the furniture' : 'a building') : 'ground'} at ${vn.toFixed(1)} m/s (this drone survives about ${F.crashV} m/s)`, vn);
+    if (tilt > 65 && (S.armed || hs > 2)) return crash(tilt > 120 ? 'Landed upside down' : 'Tipped over: a prop hit the ground', Math.max(2, hs + vn));
+    if (hs > F.crashV*.8 && tilt > 25) return crash(`Cartwheeled at ${hs.toFixed(1)} m/s`, hs);
+    p[2] = sh + CR.foot; if (S.vel[2] < 0) S.vel[2] = 0;
+    const Tsum = S.T.reduce((x, y) => x + y, 0);
+    if (Tsum < F.mass*G*.98){ S.ground = true; S.vel[0] *= Math.max(0, 1 - 9*dt); S.vel[1] *= Math.max(0, 1 - 9*dt);
+      // resting on its feet: settle level
+      const bz = [S.R[2], S.R[5], S.R[8]], e = mtv(S.R, cr(bz, [0, 0, 1])); S.w = [e[0]*8, e[1]*8, S.w[2]*.8]; }
+  }
+  for (const c of W.col){
+    if (c.t === 'box' && p[2] - CR.foot >= c.mx[2] - .03) continue;          // standing on it: handled as a surface
+    const q = closest(c, p), d = sb(p, q), dist = len(d);
+    if (dist >= CR.rad) continue;
+    // inside the collider already (fast or thin): push back out the side it came in through
+    const qp = closest(c, prev), dp2 = sb(prev, qp), nrm = dist > 1e-6 ? sc(d, 1/dist) : len(dp2) > 1e-6 ? nz(dp2) : [0, 0, 1], vn = -dt3(S.vel, nrm);
+    if (vn > F.crashV*(F.ducts ? 1 : .75)) return crash(`Hit ${colName(c)} at ${vn.toFixed(1)} m/s`, vn);
+    S.pos = dist > 1e-6 ? add(p, sc(nrm, CR.rad - dist)) : add(qp, sc(nrm, CR.rad)); if (vn > 0){ S.vel = add(S.vel, sc(nrm, vn*1.35)); S.vel = sc(S.vel, .8);
+      S.w = add(S.w, [(rnd() - .5)*vn*(F.ducts ? 4 : 10), (rnd() - .5)*vn*(F.ducts ? 4 : 10), (rnd() - .5)*vn*3]); }
+  }
+  const lim = W.id === 'room' ? 4 : 400; if (Math.abs(p[0]) > lim || Math.abs(p[1]) > lim || p[2] > 400) { crash('Flew out of range: the radio link failsafed', 2); }
+}
+function gates(prev){
+  if (!W.gates.length) return;
+  const g = W.gates[S.gate], n = [Math.cos(g.a), Math.sin(g.a), 0], s0 = dt3(sb(prev, g.c), n), s1 = dt3(sb(S.pos, g.c), n);
+  if (s0 < 0 && s1 >= 0){ const t = s0/(s0 - s1), hit = add(prev, sc(sb(S.pos, prev), t)), d = sb(hit, g.c), u = -d[0]*n[1] + d[1]*n[0];
+    if (Math.abs(u) < g.w/2 && Math.abs(d[2]) < g.h/2){
+      if (S.gate === 0){ if (S.lapStart != null){ const lap = S.t - S.lapStart; S.lastLap = lap; if (S.best == null || lap < S.best){ S.best = lap; store.set('dl-best-' + W.id + '-' + D.id, lap); flash('New best lap: ' + lap.toFixed(2) + ' s', 2); } else flash('Lap: ' + lap.toFixed(2) + ' s', 1.5); } S.lapStart = S.t; }
+      S.gate = (S.gate + 1) % W.gates.length; } }
+}
+function stepDebris(dt){
+  for (const d of S.debris){ if (d.rest) continue;
+    d.vel[2] -= G*dt; d.vel = sc(d.vel, 1 - .3*dt); d.pos = add(d.pos, sc(d.vel, dt)); d.R = orthon(mm(d.R, expW(d.w, dt)));
+    const zmin = Math.min(...d.objs.map(o => o.mn[2])), floor = surfaceAt(d.pos[0], d.pos[1], d.pos[2]) + Math.max(.005, -zmin*.5);
+    if (d.pos[2] < floor){ d.pos[2] = floor; d.vel = [d.vel[0]*.5, d.vel[1]*.5, Math.abs(d.vel[2])*.3]; d.w = sc(d.w, .5); if (len(d.vel) < .3){ d.rest = true; } } }
+}
+
+/* ---------- rendering ---------- */
+const cv = document.getElementById('cv'), cx = cv.getContext('2d');
+let VW = 0, VH = 0, DPR = 1;
+function resize(){ DPR = Math.min(1.75, devicePixelRatio || 1); VW = innerWidth; VH = innerHeight; cv.width = VW*DPR; cv.height = VH*DPR; }
+addEventListener('resize', resize); resize();
+const cam = { pos:[0,0,0], f:[1,0,0], r:[0,-1,0], u:[0,0,1], F:500, near:.03, chase:null };
+function setCam(pos, f, upHint, hfov){ cam.pos = pos; cam.f = nz(f); cam.r = nz(cr(cam.f, upHint)); cam.u = cr(cam.r, cam.f); cam.F = (VW/2)/Math.tan(hfov*Math.PI/360); }
+function updateCam(dt){
+  const v = SET.view, R = S.crashed ? (S.debris[0] ? S.debris[0].R : S.R) : S.R, p = S.crashed && S.debris[0] ? S.debris[0].pos : S.pos, rt = rates(), sz = Math.max(.25, CR.rad*2);
+  cam.near = Math.max(.01, sz*.05);
+  if (v === 'fpv' && !S.crashed){
+    const up = rt.up*Math.PI/180;
+    if (D.fly.cam === 'gimbal'){ const hd = Math.atan2(R[3], R[0]), f = [Math.cos(hd)*Math.cos(up), Math.sin(hd)*Math.cos(up), Math.sin(up)]; setCam(p, f, [0, 0, 1], rt.fov); }
+    else { const fb = mv(R, [Math.cos(up), 0, Math.sin(up)]), ub = mv(R, [-Math.sin(up), 0, Math.cos(up)]); setCam(add(p, mv(R, [CR.rad*.3, 0, .01])), fb, ub, rt.fov); }
+  } else if (v === 'los'){ setCam(W.pilot, sb(p, W.pilot), [0, 0, 1], 52); }
+  else {
+    const hd = Math.atan2(R[3], R[0]), back = [-Math.cos(hd), -Math.sin(hd), 0], want = add(p, add(sc(back, sz*3.5 + .5), [0, 0, sz*1.2 + .25]));
+    if (!cam.chase) cam.chase = want; cam.chase = add(cam.chase, sc(sb(want, cam.chase), Math.min(1, dt*5))); cam.chase[2] += (want[2] - cam.chase[2])*Math.min(1, dt*12);
+    if (W.id === 'room') cam.chase = [clamp(cam.chase[0], -3.1, 3.1), clamp(cam.chase[1], -2.5, 2.5), clamp(cam.chase[2], .1, 2.5)];
+    const floor = surfaceAt(cam.chase[0], cam.chase[1], cam.chase[2]) + .15; if (cam.chase[2] < floor) cam.chase[2] = floor;
+    setCam(cam.chase, sb(add(p, [0, 0, sz*.25]), cam.chase), [0, 0, 1], 78);
+  }
+}
+const toC = p => { const d = sb(p, cam.pos); return [dt3(d, cam.r), dt3(d, cam.u), dt3(d, cam.f)]; };
+function clipN(poly){ const out = [], nr = cam.near;
+  for (let i = 0; i < poly.length; i++){ const a = poly[i], b = poly[(i+1) % poly.length], ia = a[2] >= nr, ib = b[2] >= nr;
+    if (ia) out.push(a); if (ia !== ib){ const t = (nr - a[2])/(b[2] - a[2]); out.push([a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t, nr]); } }
+  return out; }
+const scr = q => [(VW/2 + q[0]/q[2]*cam.F)*DPR, (VH/2 - q[1]/q[2]*cam.F)*DPR];
+function subPath(ptsW){ const c = clipN(ptsW.map(toC)); if (c.length < 3) return false;
+  c.forEach((q, i) => { const s = scr(q); i ? cx.lineTo(s[0], s[1]) : cx.moveTo(s[0], s[1]); }); cx.closePath(); return true; }
+function poly(ptsW, fillC, ink = 0, alpha = 1){
+  cx.beginPath(); if (!subPath(ptsW)) return false;
+  if (alpha < 1) cx.globalAlpha = alpha; cx.fillStyle = fillC; cx.fill(); if (alpha < 1) cx.globalAlpha = 1;
+  if (ink){ cx.lineWidth = ink*DPR; cx.stroke(); } return true; }
+function fogged(m, n, dist){   // flat tone, faded toward the haze in 8 steps with distance
+  const lvl = Math.min(7, Math.floor(dist/W.far*8)), base = toneOf(n, m);
+  return lvl ? mix(base, W.haze, lvl/8*.9) : base; }
+function drawObj(o, xf, opt = {}){
+  const faces = [];
+  for (const fc of o.faces){
+    const p = xf ? fc.p.map(xf.p) : fc.p, n = xf ? xf.n(fc.n) : fc.n;
+    if (dt3(n, sb(cam.pos, p[0])) <= 0) continue;
+    let d = 0; for (const q of p) d += len(sb(q, cam.pos)); d /= p.length;
+    faces.push({ p, n, d, m: fc.mat });
+  }
+  faces.sort((a, b) => b.d - a.d);
+  for (const fc of faces){ const m = opt.hl ? opt.hl : fc.m; poly(fc.p, fogged(m, fc.n, fc.d), fc.d < W.far*.6 ? clamp(2.2 - fc.d/25, .5, 1.8)*(opt.inkK || 1) : 0); }
+}
+const boxDist = o => { const q = [0,1,2].map(i => clamp(cam.pos[i], o.mn[i], o.mx[i])); return len(sb(q, cam.pos)); };
+function render(dt){
+  updateCam(dt);
+  const w = cv.width, h = cv.height;
+  cx.setTransform(1, 0, 0, 1, 0, 0); cx.lineJoin = 'round'; cx.lineCap = 'round'; cx.strokeStyle = INK;
+  cx.fillStyle = W.sky; cx.fillRect(0, 0, w, h);
+  // ground: one huge quad around the camera; the horizon falls where it meets the sky
+  const G0 = 5000, gp0 = cam.pos;
+  poly([[gp0[0] - G0, gp0[1] - G0, 0], [gp0[0] + G0, gp0[1] - G0, 0], [gp0[0] + G0, gp0[1] + G0, 0], [gp0[0] - G0, gp0[1] + G0, 0]], W.ground);
+  // haze band along the horizon
+  const hz = d => { const q = [dt3(d, cam.r), dt3(d, cam.u), dt3(d, cam.f)]; return q[2] > 1e-4 ? scr(q) : null; };
+  const fh = nz([cam.f[0], cam.f[1], 0]), rh = nz([cam.r[0], cam.r[1], 0]);
+  if (len([cam.f[0], cam.f[1], 0]) > .05){ const A = hz(add(fh, sc(rh, -3))), B = hz(add(fh, sc(rh, 3)));
+    if (A && B){ const ang = Math.atan2(B[1] - A[1], B[0] - A[0]); cx.save(); cx.translate(A[0], A[1]); cx.rotate(ang);
+      const gr = cx.createLinearGradient(0, -40*DPR, 0, 40*DPR); gr.addColorStop(0, W.sky + '00'); gr.addColorStop(.5, W.haze); gr.addColorStop(1, W.haze + '00');
+      cx.fillStyle = gr; cx.fillRect(-4*w, -40*DPR, 8*w + Math.hypot(B[0] - A[0], B[1] - A[1]), 80*DPR); cx.restore(); } }
+  // ground decals and grass tufts (they give the eye speed and height)
+  // un-inked decals of one colour go in one path (road markings, stripes): far fewer canvas calls
+  let batchCol = null; const flush = () => { if (batchCol){ cx.fillStyle = batchCol; cx.fill(); batchCol = null; } };
+  for (const dc of W.decals){ if (!dc.c){ dc.c = dc.p.reduce((a, q) => add(a, sc(q, 1/dc.p.length)), [0,0,0]); dc.r = Math.max(...dc.p.map(q => len(sb(q, dc.c)))); }
+    if (len(sb(dc.c, cam.pos)) - dc.r > W.far) continue;
+    if (dc.ink){ flush(); poly(dc.p, dc.col, 1); continue; }
+    if (batchCol !== dc.col){ flush(); batchCol = dc.col; cx.beginPath(); }
+    subPath(dc.p); }
+  flush();
+  cx.beginPath(); const tr = W.id === 'room' ? 0 : 45;
+  for (const [x, y] of W.tufts){ const dx = x - cam.pos[0], dy = y - cam.pos[1]; if (dx*dx + dy*dy > tr*tr) continue;
+    for (const o of [-.07, .07]){ const a = toC([x, y, 0]), b = toC([x + o, y + o*.4, .14]); if (a[2] < cam.near || b[2] < cam.near) continue; const sa = scr(a), sb2 = scr(b); cx.moveTo(sa[0], sa[1]); cx.lineTo(sb2[0], sb2[1]); } }
+  cx.strokeStyle = '#5f8f55'; cx.lineWidth = 1.1*DPR; cx.stroke(); cx.strokeStyle = INK;
+  // objects: background (walls, hills) first, then far to near
+  const list = [];
+  for (const o of W.objs){
+    const dv = sb(o.c, cam.pos), dist = len(dv);
+    if (!o.bg && dist - o.r > W.far) continue;
+    if (dt3(dv, cam.f) < -o.r) continue;
+    list.push({ o, d: o.bg ? 1e9 - dist : boxDist(o) + dist*1e-3 });
+  }
+  // the drone's shadow on whatever is under it
+  const dp = S.crashed ? null : S.pos;
+  if (dp){ const sh = surfaceAt(dp[0], dp[1], dp[2]), r = CR.rad*.8, k = clamp(1 - (dp[2] - sh)/25, .15, 1);
+    const sp = circP(dp[0], dp[1], r, 14).map(([x, y]) => [x, y, sh + .004]);
+    list.push({ shadow: sp, alpha: .38*k, d: len(sb(dp, cam.pos)) + .01 }); }
+  // the drone (not in FPV, where you are the camera)
+  if (!S.crashed && SET.view !== 'fpv') list.push({ craft:true, d: len(sb(S.pos, cam.pos)) - CR.rad*.3 });
+  if (S.crashed) for (const d of S.debris) list.push({ debris: d, d: len(sb(d.pos, cam.pos)) });
+  list.sort((a, b) => b.d - a.d);
+  const nextGate = W.gates[S.gate];
+  for (const it of list){
+    if (it.shadow){ poly(it.shadow, SHADOW, 0, it.alpha); continue; }
+    if (it.craft){ drawCraft(); continue; }
+    if (it.debris){ const d = it.debris; for (const o of d.objs) drawObj(o, { p: q => add(d.pos, mv(d.R, q)), n: v => mv(d.R, v) }); continue; }
+    drawObj(it.o, null, { hl: it.o.gate && it.o.gate === nextGate ? MAT.yellow : null });
+  }
+  drawHUD();
+}
+function drawCraft(){
+  const R = S.R, P0 = S.pos, xf = { p: q => add(P0, mv(R, q)), n: v => mv(R, v) };
+  const items = CR.parts.map(p => ({ p, d: len(sb(xf.p(p.o.c), cam.pos)) }));
+  CR.props.forEach((pr, i) => items.push({ prop: pr, i, d: len(sb(xf.p([pr.x, pr.y, pr.z]), cam.pos)) - .001 }));
+  items.sort((a, b) => b.d - a.d);
+  const Tmax = D.fly.twr*D.fly.mass*G/CR.n;
+  for (const it of items){
+    if (it.p){ drawObj(it.p.o, xf, { inkK: .8 }); continue; }
+    const pr = it.prop, sp = Math.sqrt(Math.max(0, S.T[it.i])/Tmax);
+    const disc = circP(pr.x, pr.y, pr.r, 16).map(([x, y]) => xf.p([x, y, pr.z]));
+    poly(disc, pr.col, 0, S.armed || sp > .02 ? .22 + .2*sp : 0);
+    // the blades: blurred when spinning, a bar when still
+    const a = S.spin[it.i]*-pr.dir, nb = D.geo.blades;
+    for (let b = 0; b < nb; b++){ const t = a + b*2*Math.PI/nb, c = Math.cos(t), s = Math.sin(t), wb = pr.r*.09;
+      const bl = [[pr.x + c*pr.r*.1 - s*wb, pr.y + s*pr.r*.1 + c*wb], [pr.x + c*pr.r - s*wb*.5, pr.y + s*pr.r + c*wb*.5], [pr.x + c*pr.r + s*wb*.5, pr.y + s*pr.r - c*wb*.5], [pr.x + c*pr.r*.1 + s*wb, pr.y + s*pr.r*.1 - c*wb]].map(([x, y]) => xf.p([x, y, pr.z + .001]));
+      poly(bl, pr.col, .8, S.armed ? .45 : 1); }
+  }
+}
+
+/* ---------- HUD: OSD numbers, attitude, the live mixer and the sticks ---------- */
+function txt(s, x, y, size = 13, col = INK, align = 'left', bold = 700){ cx.font = `${bold} ${size*DPR}px ui-monospace,Menlo,monospace`; cx.textAlign = align; cx.fillStyle = col; cx.fillText(s, x*DPR, y*DPR); }
+function osd(s, x, y, size = 14, align = 'left', col = '#ffffff'){ cx.font = `800 ${size*DPR}px ui-monospace,Menlo,monospace`; cx.textAlign = align; cx.lineWidth = 3*DPR; cx.strokeStyle = '#000000'; cx.strokeText(s, x*DPR, y*DPR); cx.fillStyle = col; cx.fillText(s, x*DPR, y*DPR); cx.strokeStyle = INK; }
+function panel(x, y, w, h){ cx.beginPath(); cx.roundRect((x + 3)*DPR, (y + 3)*DPR, w*DPR, h*DPR, 10*DPR); cx.fillStyle = INK; cx.fill();
+  cx.beginPath(); cx.roundRect(x*DPR, y*DPR, w*DPR, h*DPR, 10*DPR); cx.fillStyle = '#fbf7ea'; cx.fill(); cx.lineWidth = 1.6*DPR; cx.strokeStyle = INK; cx.stroke(); }
+function padRect(side){ const s = Math.min(150, VW*.28, VH*.24), m = 14, y = VH - s - m; return side === 'L' ? [m, y, s] : [VW - s - m, y, s]; }
+let barBottom = 54;
+function drawHUD(){
+  const F = D.fly, alt = S.pos[2] - CR.foot, spd = Math.hypot(...S.vel)*3.6, pct = clamp(1 - S.used/F.mAh, 0, 1)*100;
+  const fpv = SET.view === 'fpv', top = Math.max(54, barBottom + 10);
+  const R = S.R, pitch = Math.asin(clamp(R[6], -1, 1)), roll = Math.atan2(R[7], R[8]);
+  if (fpv && !S.crashed){
+    // a Betaflight-style OSD: crosshair, artificial horizon, numbers
+    const cxm = VW/2, cym = VH/2, k = cam.F, hl = Math.min(140, VW*.18);
+    cx.save(); cx.translate(cxm*DPR, cym*DPR); cx.rotate(roll);
+    const off = Math.tan(pitch)*k*.3;
+    cx.strokeStyle = '#ffffff'; cx.lineWidth = 2*DPR; cx.shadowColor = '#000'; cx.shadowBlur = 2*DPR;
+    cx.beginPath(); cx.moveTo(-hl*DPR, off*DPR); cx.lineTo(-hl*.3*DPR, off*DPR); cx.moveTo(hl*.3*DPR, off*DPR); cx.lineTo(hl*DPR, off*DPR); cx.stroke(); cx.restore();
+    cx.shadowBlur = 0; cx.strokeStyle = '#ffffff'; cx.lineWidth = 2*DPR; cx.beginPath(); cx.moveTo((cxm - 10)*DPR, cym*DPR); cx.lineTo((cxm + 10)*DPR, cym*DPR); cx.moveTo(cxm*DPR, (cym - 6)*DPR); cx.lineTo(cxm*DPR, (cym + 6)*DPR); cx.stroke(); cx.strokeStyle = INK;
+    osd(`${(S.cellV*F.cells).toFixed(1)}V  ${(S.cellV).toFixed(2)}/cell`, 16, top + 10, 14, 'left', S.cellV < 3.5 ? '#ff6a5a' : '#ffffff');
+    osd(`${Math.round(pct)}%  ${S.amps.toFixed(0)}A`, 16, top + 30);
+    osd(`${fmtT(S.flightT)}`, VW - 16, top + 10, 14, 'right');
+    osd(`ALT ${alt.toFixed(1)}m  ${spd.toFixed(0)}km/h`, VW - 16, top + 30, 14, 'right');
+    osd(S.armed ? modeNames[S.mode].toUpperCase() : 'DISARMED', VW/2, top + 10, 14, 'center', S.armed ? '#ffffff' : '#ffd23f');
+  } else {
+    panel(10, top, 186, 98);
+    txt(S.armed ? 'ARMED' : 'DISARMED', 22, top + 20, 12, S.armed ? '#c4362b' : INK, 'left', 800); txt(modeNames[S.mode].toUpperCase() + ' MODE', 184, top + 20, 11, INK, 'right', 700);
+    cx.lineWidth = 1.4*DPR; cx.strokeStyle = INK; cx.strokeRect(22*DPR, (top + 30)*DPR, 120*DPR, 12*DPR);
+    cx.fillStyle = pct < 25 ? '#e2483d' : '#43c25c'; cx.fillRect(23.5*DPR, (top + 31.5)*DPR, 117*pct/100*DPR, 9*DPR);
+    txt(Math.round(pct) + '%', 184, top + 41, 12, INK, 'right');
+    txt(`${(S.cellV*F.cells).toFixed(1)} V  ${S.cellV.toFixed(2)} V/cell`, 22, top + 60, 12, S.cellV < 3.5 ? '#c4362b' : INK);
+    txt(`ALT ${alt.toFixed(1)} m   ${spd.toFixed(0)} km/h`, 22, top + 77, 12);
+    txt(`TIME ${fmtT(S.flightT)}   ${S.amps.toFixed(0)} A`, 22, top + 93, 12);
+    // attitude ball
+    const ax = 240, ay = top + 50, ar = 40;
+    cx.save(); cx.beginPath(); cx.arc(ax*DPR, ay*DPR, ar*DPR, 0, 2*Math.PI); cx.fillStyle = '#9fc9e8'; cx.fill(); cx.clip();
+    cx.translate(ax*DPR, ay*DPR); cx.rotate(-roll); cx.fillStyle = '#c99a5b'; cx.fillRect(-ar*2*DPR, (pitch/(Math.PI/2))*ar*DPR, ar*4*DPR, ar*4*DPR);
+    cx.strokeStyle = '#fff'; cx.lineWidth = 1.5*DPR; cx.beginPath(); cx.moveTo(-ar*DPR, (pitch/(Math.PI/2))*ar*DPR); cx.lineTo(ar*DPR, (pitch/(Math.PI/2))*ar*DPR); cx.stroke(); cx.restore();
+    cx.beginPath(); cx.arc(ax*DPR, ay*DPR, ar*DPR, 0, 2*Math.PI); cx.lineWidth = 1.8*DPR; cx.strokeStyle = INK; cx.stroke();
+    cx.beginPath(); cx.moveTo((ax - 22)*DPR, ay*DPR); cx.lineTo((ax - 7)*DPR, ay*DPR); cx.lineTo(ax*DPR, (ay + 6)*DPR); cx.lineTo((ax + 7)*DPR, ay*DPR); cx.lineTo((ax + 22)*DPR, ay*DPR); cx.lineWidth = 2.4*DPR; cx.strokeStyle = '#f4b829'; cx.stroke(); cx.strokeStyle = INK;
+  }
+  // race info
+  if (W.gates.length){ const y = fpv ? top + 52 : top + 20, x = VW - 16;
+    const lap = S.lapStart != null ? S.t - S.lapStart : 0;
+    const line = `GATE ${S.gate + 1}/${W.gates.length}   LAP ${lap ? lap.toFixed(1) : '-'}s   BEST ${S.best ? S.best.toFixed(2) + 's' : '-'}`;
+    if (fpv) osd(line, x, y, 13, 'right'); else { panel(VW - 330, top, 320, 26); txt(line, VW - 20, top + 18, 12, INK, 'right'); }
+    // marker over the next gate, or an arrow at the edge pointing to it
+    const g = W.gates[S.gate], q = toC(add(g.c, [0, 0, g.h/2 + .5]));
+    if (q[2] > cam.near){ const s = scr(q); if (s[0] > 0 && s[0] < cv.width && s[1] > 0 && s[1] < cv.height){ cx.beginPath(); cx.moveTo(s[0], s[1]); cx.lineTo(s[0] - 9*DPR, s[1] - 14*DPR); cx.lineTo(s[0] + 9*DPR, s[1] - 14*DPR); cx.closePath(); cx.fillStyle = '#f4b829'; cx.fill(); cx.lineWidth = 1.6*DPR; cx.stroke(); } }
+    else txt('NEXT GATE IS BEHIND YOU (yellow)', VW/2, VH*.72, 12, INK, 'center');
+  }
+  // the live mixer: each motor's output, placed like the real motors, ring colour = spin direction
+  const Tmax = F.twr*F.mass*G/CR.n, mw = Math.min(190, VW - 2*padRect('L')[2] - 52), mh = mw*.72, mx0 = VW/2 - mw/2, my0 = VH - mh - 16;
+  if (mw > 90){ panel(mx0, my0, mw, mh);
+  txt('MOTOR MIX', mx0 + 10, my0 + 16, 10.5, '#857d6e', 'left', 800);
+  const ext = Math.max(...CR.pos.map(([x, y]) => Math.max(Math.abs(x), Math.abs(y)))), mr = Math.min(15, mh*.12), sk = (mh/2 - mr - 14)/ext, ccx = mx0 + mw/2, ccy = my0 + mh/2 + 9;
+  cx.beginPath(); CR.pos.forEach(([x, y]) => { cx.moveTo(ccx*DPR, ccy*DPR); cx.lineTo((ccx - y*sk)*DPR, (ccy - x*sk)*DPR); }); cx.lineWidth = 3*DPR; cx.strokeStyle = '#857d6e'; cx.stroke(); cx.strokeStyle = INK;
+  CR.pos.forEach(([x, y], i) => { const px = ccx - y*sk, py = ccy - x*sk, v = clamp(S.T[i]/Tmax, 0, 1);
+    cx.beginPath(); cx.arc(px*DPR, py*DPR, mr*DPR, 0, 2*Math.PI); cx.fillStyle = '#fbf7ea'; cx.fill();
+    cx.beginPath(); cx.moveTo(px*DPR, py*DPR); cx.arc(px*DPR, py*DPR, mr*DPR, -Math.PI/2, -Math.PI/2 + v*2*Math.PI); cx.closePath(); cx.fillStyle = '#f4b829'; cx.fill();
+    cx.beginPath(); cx.arc(px*DPR, py*DPR, mr*DPR, 0, 2*Math.PI); cx.lineWidth = 2.6*DPR; cx.strokeStyle = CR.dirs[i] > 0 ? '#e2483d' : '#3f78d8'; cx.stroke();
+    if (mr > 9) txt(Math.round(v*100) + '', px, py + 4, 9.5, INK, 'center', 800); });
+  cx.strokeStyle = INK; txt('NOSE UP', mx0 + mw - 10, my0 + 16, 9.5, '#857d6e', 'right', 800); }
+  // sticks
+  for (const side of ['L', 'R']){ const [x, y, s] = padRect(side), v = SET.stickMode == 1 ? (side === 'L' ? [stick.L[0], stick.R[1]] : [stick.R[0], stick.L[1]]) : stick[side];
+    cx.globalAlpha = .9; panel(x, y, s, s); cx.globalAlpha = 1;
+    cx.beginPath(); cx.moveTo((x + s/2)*DPR, (y + 10)*DPR); cx.lineTo((x + s/2)*DPR, (y + s - 10)*DPR); cx.moveTo((x + 10)*DPR, (y + s/2)*DPR); cx.lineTo((x + s - 10)*DPR, (y + s/2)*DPR); cx.lineWidth = 1*DPR; cx.strokeStyle = '#c9c1b2'; cx.stroke(); cx.strokeStyle = INK;
+    const kx = x + s/2 + v[0]*(s/2 - 16), ky = y + s/2 - v[1]*(s/2 - 16);
+    cx.beginPath(); cx.moveTo((x + s/2)*DPR, (y + s/2)*DPR); cx.lineTo(kx*DPR, ky*DPR); cx.lineWidth = 4*DPR; cx.stroke();
+    cx.beginPath(); cx.arc(kx*DPR, ky*DPR, 11*DPR, 0, 2*Math.PI); cx.fillStyle = '#f4b829'; cx.fill(); cx.lineWidth = 1.8*DPR; cx.stroke();
+    const thrSide = SET.stickMode == 1 ? 'R' : 'L';
+    txt(side === thrSide ? 'THROTTLE / YAW' : 'PITCH / ROLL', x + s/2, y - 6, 10, INK, 'center', 800);
+    if (side === thrSide) txt(Math.round((stick.L[1] + 1)*50) + '%', x + s - 6, y + 14, 10, '#857d6e', 'right', 800); }
+  // messages
+  let msg = S.msgT > 0 ? S.msg : '';
+  if (S.crashed) msg = 'CRASH: ' + S.crashed + '. Press R or Reset for a fresh drone.';
+  else if (!S.armed && !msg) msg = (S.mode === 'acro' || S.mode === 'angle') ? 'Disarmed. Throttle all the way down, then press Enter (or your arm switch) to arm.' : 'Disarmed. Press Enter (or your arm switch) to start the motors, then push the throttle up to climb.';
+  else if (S.armed && S.cellV < 3.5 && Math.floor(S.t*2) % 2) msg = 'LOW BATTERY: land now';
+  if (S.paused) msg = 'Paused (P)';
+  if (msg){ cx.font = `700 ${13*DPR}px ui-monospace,Menlo,monospace`; const words = msg.split(' '), lines = []; let ln = '';
+    for (const wd of words){ if (cx.measureText(ln + ' ' + wd).width/DPR > Math.min(520, VW - 60)) { lines.push(ln); ln = wd; } else ln = ln ? ln + ' ' + wd : wd; } lines.push(ln);
+    const bw = Math.min(560, VW - 40), bh = lines.length*18 + 18, bx = VW/2 - bw/2, by = fpv ? top + 60 : VH*.22;
+    panel(bx, by, bw, bh); cx.fillStyle = S.crashed ? '#fbe0d6' : '#fff1bf'; cx.beginPath(); cx.roundRect((bx + 1.5)*DPR, (by + 1.5)*DPR, (bw - 3)*DPR, (bh - 3)*DPR, 9*DPR); cx.fill();
+    lines.forEach((l, i) => txt(l, VW/2, by + 22 + i*18, 13, INK, 'center')); }
+}
+const fmtT = t => `${Math.floor(t/60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+/* ---------- pointer sticks ---------- */
+function padAt(x, y){ for (const side of ['L', 'R']){ const [px, py, s] = padRect(side); if (x >= px - 20 && x <= px + s + 20 && y >= py - 20 && y <= py + s + 20) return side; } return null; }
+function padVal(side, x, y){ const [px, py, s] = padRect(side); return [clamp((x - px - s/2)/(s/2 - 16), -1, 1), clamp(-(y - py - s/2)/(s/2 - 16), -1, 1)]; }
+cv.addEventListener('pointerdown', e => { const side = padAt(e.clientX, e.clientY); if (!side) return; e.preventDefault(); audioOn();
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  pads[side] = { id: e.pointerId, v: padVal(side, e.clientX, e.clientY) }; if (!padMem.used){ padMem.used = true; padMem.L = SET.stickMode == 1 ? [stick.L[0], stick.R[1]] : stick.L.slice(); padMem.R = SET.stickMode == 1 ? [stick.R[0], stick.L[1]] : stick.R.slice(); } });
+cv.addEventListener('pointermove', e => { for (const side of ['L', 'R']) if (pads[side] && pads[side].id === e.pointerId) pads[side].v = padVal(side, e.clientX, e.clientY); });
+const upPad = e => { for (const side of ['L', 'R']) if (pads[side] && pads[side].id === e.pointerId){
+  // a real-radio feel: the throttle stays, everything else centres (in GPS modes the throttle centres too)
+  const thrAxis = SET.stickMode == 1 ? side === 'R' : side === 'L', springThr = S.mode === 'gps' || S.mode === 'sport' || S.mode === 'cine';
+  padMem[side] = [0, thrAxis && !springThr ? pads[side].v[1] : 0]; pads[side] = null; } };
+cv.addEventListener('pointerup', upPad); cv.addEventListener('pointercancel', upPad);
+
+/* ---------- motor sound: a buzz whose pitch follows the motors ---------- */
+let AC = null, osc = null, osc2 = null, gain = null;
+function audioOn(){ if (AC || !SET.sound) return; try { AC = new (window.AudioContext || window.webkitAudioContext)(); osc = AC.createOscillator(); osc2 = AC.createOscillator(); gain = AC.createGain();
+  const flt = AC.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 1400; osc.type = 'sawtooth'; osc2.type = 'square'; osc.connect(flt); osc2.connect(flt); flt.connect(gain); gain.connect(AC.destination); gain.gain.value = 0; osc.start(); osc2.start(); } catch (e) { AC = null; } }
+function audio(){ if (!AC) return; const Tmax = D.fly.twr*D.fly.mass*G/CR.n, sp = S.T.reduce((a, t) => a + Math.sqrt(Math.max(0, t)/Tmax), 0)/CR.n, base = 60 + 900/Math.sqrt(D.geo.propR);
+  const on = SET.sound && !S.paused && (S.armed || sp > .02) && !S.crashed; gain.gain.setTargetAtTime(on ? .035 + .05*sp : 0, AC.currentTime, .05);
+  osc.frequency.setTargetAtTime(base*(.5 + sp*1.6), AC.currentTime, .03); osc2.frequency.setTargetAtTime(base*(.5 + sp*1.6)*1.5 + 3, AC.currentTime, .03); }
+
+/* ---------- UI wiring ---------- */
+const $ = id => document.getElementById(id);
+const selD = $('selDrone'), selE = $('selEnv');
+for (const d of DL_DRONES.filter(d => d.ready)){ const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; selD.appendChild(o); }
+for (const [k, v] of ENVS){ const o = document.createElement('option'); o.value = k; o.textContent = v; selE.appendChild(o); }
+selD.onchange = () => { D = dlDrone(selD.value); S = null; load(); history.replaceState(null, '', '?d=' + D.id); selD.blur(); };
+selE.onchange = () => { SET.env = selE.value; saveSet(); const c = S.crashes; load(); S.crashes = c; selE.blur(); };
+const views = [['chase', 'Chase'], ['fpv', 'FPV'], ['los', 'Line of sight']];
+const cycleView = () => { const i = views.findIndex(v => v[0] === SET.view); SET.view = views[(i + 1) % views.length][0]; cam.chase = null; saveSet(); syncUI(); };
+const cycleMode = () => { const ms = D.fly.modes, i = ms.indexOf(S.mode); S.mode = ms[(i + 1) % ms.length]; syncUI(); flash('Mode: ' + modeNames[S.mode] + ' (' + { acro:'sticks set rotation rate; nothing self-levels', angle:'sticks set tilt; it levels itself', gps:'sticks set speed; let go to hold position', sport:'faster GPS mode', cine:'slow, smooth GPS mode for filming' }[S.mode] + ')', 2.6); };
+$('bView').onclick = e => { cycleView(); e.target.blur(); };
+$('bMode').onclick = e => { cycleMode(); e.target.blur(); };
+$('bArm').onclick = e => { S.armed ? disarm() : tryArm(); e.target.blur(); syncUI(); };
+$('bReset').onclick = e => { reset(); e.target.blur(); };
+for (const [b, c] of [['bHelp', 'help'], ['bSet', 'set'], ['bHow', 'how']]) $(b).onclick = e => { for (const k of ['help', 'set', 'how']) $(k).hidden = k !== c || !$(k).hidden; e.target.blur(); if (c === 'set') fillSettings(); };
+document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('.card').hidden = true);
+function syncUI(){ selD.value = D.id; selE.value = SET.env; $('bView').textContent = 'View: ' + views.find(v => v[0] === SET.view)[1]; $('bMode').textContent = 'Mode: ' + modeNames[S.mode];
+  $('bArm').textContent = S.armed ? 'Disarm' : 'Arm'; $('bArm').setAttribute('aria-pressed', S.armed); }
+function fillSettings(){
+  const rt = rates(), bind = (id, oid, key, fmt) => { const el = $(id), o = $(oid); el.value = rt[key]; o.textContent = fmt(rt[key]);
+    el.oninput = () => { const r = SET.rates[D.id] = SET.rates[D.id] || {}; r[key] = +el.value; o.textContent = fmt(+el.value); saveSet(); }; };
+  bind('rC', 'oC', 'c', v => v + '°/s'); bind('rM', 'oM', 'm', v => v + '°/s'); bind('rE', 'oE', 'e', v => (+v).toFixed(2)); bind('rY', 'oY', 'y', v => v + '°/s');
+  bind('rU', 'oU', 'up', v => v + '°'); bind('rF', 'oF', 'fov', v => v + '°');
+  $('sW').value = SET.wind; $('sW').onchange = () => { SET.wind = +$('sW').value; saveSet(); };
+  $('sS').value = SET.stickMode; $('sS').onchange = () => { SET.stickMode = +$('sS').value; saveSet(); };
+  $('cA').checked = SET.sound; $('cA').onchange = () => { SET.sound = $('cA').checked; saveSet(); if (SET.sound) audioOn(); };
+  $('bDefaults').onclick = () => { delete SET.rates[D.id]; saveSet(); fillSettings(); };
+  const g = gp, m = SET.map || (g ? defMap(g.id) : defMap('')), mg = $('mapGrid');
+  $('gpName').textContent = g ? '(' + g.id.slice(0, 40) + ')' : '(no controller detected: plug one in and press a button)';
+  mg.innerHTML = '';
+  for (const [k, nm] of [['thr', 'Throttle'], ['yaw', 'Yaw'], ['pitch', 'Pitch'], ['roll', 'Roll']]){
+    const opts = Array.from({ length: 8 }, (_, i) => `<option value="${i}" ${m[k] === i ? 'selected' : ''}>Axis ${i}</option>`).join('');
+    mg.insertAdjacentHTML('beforeend', `<label>${nm}</label><select data-k="${k}">${opts}</select><label style="text-transform:none"><input type="checkbox" data-inv="${k}" ${m.inv && m.inv[k] ? 'checked' : ''}> invert</label>`); }
+  const armOpts = [...Array.from({ length: 8 }, (_, i) => `<option value="a${i}">Switch on axis ${i}</option>`), ...Array.from({ length: 12 }, (_, i) => `<option value="b${i}">Button ${i}</option>`)].join('');
+  mg.insertAdjacentHTML('beforeend', `<label>Arm</label><select data-arm>${armOpts}</select><span></span>`);
+  mg.querySelector('[data-arm]').value = m.arm || 'b0';
+  const save = () => { const nm = { inv:{} }; mg.querySelectorAll('select[data-k]').forEach(s => nm[s.dataset.k] = +s.value); mg.querySelectorAll('[data-inv]').forEach(c => nm.inv[c.dataset.inv] = c.checked); nm.arm = mg.querySelector('[data-arm]').value; SET.map = nm; saveSet(); };
+  mg.querySelectorAll('select,input').forEach(el => el.onchange = save);
+}
+function axesView(){ const el = $('axes'); if ($('set').hidden || !gp) { if (el.childElementCount && !gp) el.innerHTML = ''; return; }
+  el.innerHTML = gp.axes.slice(0, 8).map((v, i) => `<div>Axis ${i} <b>${v.toFixed(2)}</b><i style="left:${50 + Math.min(0, v)*50}%;width:${Math.abs(v)*50}%"></i></div>`).join(''); }
+addEventListener('keydown', e => {
+  if (/input|select|textarea/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(); audioOn();
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+  if (e.repeat) { keys.add(k); return; }
+  keys.add(k);
+  if (k === 'enter' || k === ' '){ S.armed ? disarm() : tryArm(); syncUI(); }
+  else if (k === 'r') reset(); else if (k === 'v' || k === 'c') cycleView(); else if (k === 'm') cycleMode(); else if (k === 'p') S.paused = !S.paused;
+  else if (k === 'escape') for (const c of ['help', 'set', 'how']) $(c).hidden = true;
+});
+addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+addEventListener('blur', () => keys.clear());
+
+/* ---------- main loop ---------- */
+load(); barBottom = $('bar').getBoundingClientRect().bottom;
+if (Q.get('view')) SET.view = Q.get('view');
+if (Q.get('env')) { SET.env = Q.get('env'); load(); }
+if (Q.get('autofly')){ S.armed = true; S.mode = Q.get('mode') || S.mode; kb.L[1] = +Q.get('autofly'); stick.L[1] = kb.L[1]; }
+if (!store.get('dl-seen-help', false)){ $('help').hidden = false; store.set('dl-seen-help', true); }
+if (Q.get('help') === '0') $('help').hidden = true;
+let last = performance.now(), acc = 0, uiT = 0;
+function frame(now){
+  const dt = Math.min(.05, (now - last)/1000); last = now;
+  readInput(dt);
+  if (Q.get('autofly') && !keys.size && !gpUsed) { kb.L[1] = +Q.get('autofly'); if (Q.get('ap')) kb.R[1] = +Q.get('ap'); }
+  if (!S.paused){ acc += dt; while (acc >= DT){ step(DT); acc -= DT; } }
+  S.msgT -= dt;
+  barBottom = $('bar').getBoundingClientRect().bottom;
+  render(dt); audio();
+  if ((uiT += dt) > .25){ uiT = 0; syncUI(); axesView(); barBottom = $('bar').getBoundingClientRect().bottom;
+    // test hooks: ?probe=1 writes the state into the title, ?autofly=<throttle stick>&ap=<pitch stick> holds the sticks
+    if (Q.get('probe')) document.title = JSON.stringify({ t: +S.t.toFixed(2), pos: S.pos.map(v => +v.toFixed(2)), vel: S.vel.map(v => +v.toFixed(2)), armed: S.armed, crashed: S.crashed, V: +S.cellV.toFixed(2), A: +S.amps.toFixed(1), thr: +stick.L[1].toFixed(2), T: S.T.map(v => +v.toFixed(2)), up: +S.R[8].toFixed(3), msg: S.msg, env: W.id, ncol: W.col.length, rad: CR.rad, foot: CR.foot }); }
+}
+// screen frames drive the loop, with a timer fallback for when frames do not come (a hidden tab, headless tests)
+let pending = false, fbT = 0;
+function sched(){ pending = true; requestAnimationFrame(run); fbT = setTimeout(run, 60); }
+function run(){ if (!pending) return; pending = false; clearTimeout(fbT); frame(performance.now()); sched(); }
+sched();
+window.__S = () => S;
+})();
+</script></body></html>

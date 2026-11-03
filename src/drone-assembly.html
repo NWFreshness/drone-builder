@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drone Lab: assembly</title>
+<style>
+  #fig g.selp path[stroke="#231e16"]{stroke:#d62f8a}
+  .dlinfo{width:100%;max-width:760px;margin:2px 0 14px;border:1.5px solid #231e16;border-radius:12px;background:#fbf7ea;box-shadow:3px 3px 0 #231e16;padding:10px 14px}
+  .dlinfo h2{margin:0 0 4px;font-size:11.5px;letter-spacing:.12em;text-transform:uppercase}
+  .dlinfo p{margin:0;font-size:13px;line-height:1.5}
+  .dlinfo .lg{margin-top:6px;font-size:11.5px;color:#857d6e}
+  .dlinfo .lg b{display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid #231e16;vertical-align:-1px;margin:0 3px 0 8px}
+  .dlinfo .lg b:first-child{margin-left:0}
+</style>
+</head><body>
+<script src="core.js"></script>
+<script src="drones-data.js"></script>
+<script src="drone-draw.js"></script>
+<script>
+/* Drone Lab assembly: build a drone part by part in the real order, look through it, and see how differential
+   thrust flies it. One figure per drone (?d=id); the model and all parts live in drone-draw.js. */
+const dlQ = new URLSearchParams(location.search);
+const DR = dlDrone(dlQ.get('d') || 'freestyle');
+const DR_EXT = ddExtent(DR), DR_M = DR_EXT.r*.94, DR_MH = Math.max(1.5, DR_EXT.r*.025);
+const DR_MAT = { l:'#8cc4a6', m:'#6aa585', d:'#3f6f56' };
+DD_O = [DR_M, DR_M, DR_MH];
+// which build steps this drone really has (a tiny whoop has no separate ESC or arms)
+const DR_ALL = ddModel(DR, { show: () => 1, drop: 0 });
+const DR_STEPS = [...new Set(DR_ALL.items.map(it => it.step))].filter(i => i >= 0).sort((a, b) => a - b);
+const DR_MOT = DR_ALL.motors;
+const DR_DEMOS = {
+  hover:  { label:'Hover', t:'Hover: every motor pushes the same and total thrust equals the weight. Two props spin clockwise and two counter-clockwise: each twists the frame the other way, the twists cancel, so it does not spin.' },
+  climb:  { label:'Climb (throttle)', t:'Throttle up: all motors speed up together. Thrust is now more than the weight, so the drone accelerates upward. Throttle sets height, not speed.' },
+  pitch:  { label:'Pitch forward', t:'Pitch forward: the flight controller speeds up the rear motors and slows the front ones. The nose dips, the thrust leans forward, and the drone accelerates forward. This "mixing" is added on top of the throttle for every motor.' },
+  roll:   { label:'Roll right', t:'Roll right: the left motors speed up and the right ones slow down, so the drone banks and slides right. Stop the stick and the gyro holds the new angle.' },
+  yaw:    { label:'Yaw right', t:'Yaw right: the counter-clockwise props speed up and the clockwise ones slow down. Total thrust stays the same so height holds, but the twists no longer cancel: the frame turns opposite to the faster props.' },
+};
+const dlTarget = st => {
+  const d = st.demo, n = DR_MOT.length, base = d === 'climb' ? 1.35 : 1;
+  const thr = DR_MOT.map(m => d === 'pitch' ? (m.x < 0 ? 1.28 : .72) : d === 'roll' ? (m.y > 0 ? 1.28 : .72) : d === 'yaw' ? (m.dir < 0 ? 1.3 : .7) : base);
+  return { thr: d ? thr : Array(n).fill(0), r: d === 'roll' ? .16 : 0, p: d === 'pitch' ? .16 : 0, lift: d ? DR_EXT.h*(d === 'climb' ? .7 : .35) : 0 };
+};
+
+const dlShow = st => i => { const k = DR_STEPS.indexOf(i); if (k < 0) return 0; return k < st.done - 1 ? 1 : k === st.done - 1 ? st.anim : 0; };
+const dlWeight = st => DR_STEPS.slice(0, st.done).reduce((a, i) => a + DR.wt[i], 0);
+const dlFmtW = g => g >= 1000 ? (g/1000).toFixed(g >= 10000 ? 1 : 2) + ' kg' : Math.round(g) + ' g';
+
+function scene(st){
+  DD_T = { r: st.cur.r, p: st.cur.p, y: st.cur.y, zc: DR_EXT.h*.4, lift: st.cur.lift };
+  const tg = st.cur.thr, mod = ddModel(DR, { show: dlShow(st), drop: DR_EXT.h*1.4, from: { battery: DR.geo.style === 'shell' ? [-1.4, 0, 0] : [0, 0, 1] },
+    spin: st.spin, speeds: tg, thrust: st.demo || tg.some(v => v > .05) ? tg : null, arrows: true, sel: st.sel });
+  const M2 = 2*DR_M, top = boardTop(0, 0, M2, M2, DR_MH, DR_M*.06);
+  let s = board(0, 0, M2, M2, DR_MH, DR_M*.06, DR_MAT);
+  // cutting-mat grid
+  let gl = ''; for (let i = 1; i < 12; i++){ const t = M2*i/12; gl += pd([[t, 4, DR_MH + .02], [t, M2 - 4, DR_MH + .02]], false) + pd([[4, t, DR_MH + .02], [M2 - 4, t, DR_MH + .02]], false); }
+  s += `<path d="${gl}" fill="none" stroke="#e8f3ec" stroke-width=".7" opacity=".7"/>`;
+  if (mod.shadow.length > 2) s += `<g opacity=".55">${castShadow(mod.shadow, DR_MH, top)}</g>`;
+  const k = ease(st.xr || 0);
+  s += byDepth(mod.items.map(it => ({ box: it.box, svg: k > 0 && it.cover ? `<g opacity="${f(1 - .84*k)}">${it.svg}</g>` : it.svg })));
+  if (k > 0) s += `<g opacity="${f(k)}">${byDepth(mod.items.filter(it => it.inner))}</g>`;
+  const justPlaced = st.done ? DR_STEPS[st.done - 1] : -1, stepOf = {};
+  for (const it of mod.items) if (stepOf[it.key] == null) stepOf[it.key] = it.step;
+  // a handful of labels at a time: the outside parts normally, the electronics in see-through
+  const want = k > .6 ? ['fc', 'esc', 'gyro', 'rx', 'vtx', 'pdb', 'gps', 'xt60', 'cap', 'wire', 'battery', 'camera']
+    : ['plate', 'arm', 'duct', 'shell', 'motor', 'prop', 'camera', 'gimbal', 'action', 'battery', 'canopy', 'gear', 'antenna', 'fc', 'esc'];
+  const lab = Object.entries(mod.labels).filter(([key]) => DL_PARTS[key] && (want.includes(key) || key === st.sel))
+    .sort((a, b) => (b[0] === st.sel) - (a[0] === st.sel) || want.indexOf(a[0]) - want.indexOf(b[0])).slice(0, 9).map(([key, at]) => ({ at, text: DL_PARTS[key][0], on: st.sel === key || stepOf[key] === justPlaced }));
+  if (lab.length) s += xrCallouts(lab, [DR_M - DR_EXT.r, DR_M + DR_EXT.r, DR_M - DR_EXT.r, DR_M + DR_EXT.r, DR_MH, DR_MH + DR_EXT.h]);
+  dlInfo(st);
+  return s;
+}
+
+/* ---------- the explanation card under the figure ---------- */
+let dlInfoEl = null, dlInfoHtml = '';
+function dlInfo(st){
+  if (!dlInfoEl){ dlInfoEl = document.createElement('div'); dlInfoEl.className = 'dlinfo'; const stg = document.querySelector('.stage'); if (!stg) return; stg.after(dlInfoEl); }
+  const next = st.done < DR_STEPS.length ? DL_STEPS[DR_STEPS[st.done]].name : null;
+  let h, t;
+  if (st.sel && DL_PARTS[st.sel]){ [h, t] = DL_PARTS[st.sel]; }
+  else if (st.demo){ h = 'How it flies: ' + DR_DEMOS[st.demo].label; t = DR_DEMOS[st.demo].t; }
+  else if (st.done){ const sp = DL_STEPS[DR_STEPS[st.done - 1]]; h = `Step ${st.done} of ${DR_STEPS.length}: ${sp.name}`; t = sp.t; }
+  else { h = DR.name + ' (' + DR.cls + ')'; t = DR.blurb + ' ' + DR.facts.map(([a, b]) => a + ': ' + b).join(', ') + '.'; }
+  const nx = next ? `Next part: <strong>${next}</strong>.` : 'Fully built. Try How it flies, then Fly it.';
+  const lg = st.done > DR_STEPS.indexOf(DD_STEP_I.motors) ? ` <span><b style="background:${DD_CW}"></b>clockwise from above <b style="background:${DD_CCW}"></b>counter-clockwise <b style="background:#f4b829"></b>thrust</span>` : '';
+  const html = `<h2>${h}</h2><p>${t}</p><div class="lg">${nx} Click any part to read what it does. <a href="drone-lab.html">All drones</a>${lg}</div>`;
+  if (html !== dlInfoHtml){ dlInfoHtml = html; dlInfoEl.innerHTML = html; }
+}
+
+/* ---------- behaviour ---------- */
+let ui;
+const dlStore = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+function dlPlace(st, ms = 550){
+  if (st.done >= DR_STEPS.length) return ui.flash('Fully built. Press Fly it, or Take apart to start again');
+  st.done++; st.anim = 0; st.sel = null;
+  if (st.done === DR_STEPS.length) dlStore('dl-built-' + DR.id, '1');
+  ui.animate(dt => { st.anim = Math.min(1, st.anim + dt*1000/ms); return st.anim < 1; });
+}
+function dlRemove(st){
+  if (!st.done) return ui.flash('Nothing to take off yet');
+  dlDemo(st, null); st.done--; st.anim = 1; st.sel = null;
+}
+function dlBuildAll(st){
+  if (st.done >= DR_STEPS.length) return ui.flash('Already fully built');
+  let t = 0; st.building = true;
+  ui.animate(dt => { if (!st.building) return false; t += dt; if (st.anim >= 1 && t > .12){ t = 0; dlPlace(st, 300); } if (st.done >= DR_STEPS.length && st.anim >= 1){ st.building = false; return false; } return true; });
+}
+function dlApart(st){ st.building = false; dlDemo(st, null); st.done = 0; st.anim = 1; st.sel = null; }
+let dlDemoOn = false;
+function dlDemo(st, d){
+  st.demo = d;
+  if (dlDemoOn) return; dlDemoOn = true;
+  ui.animate(dt => { const tg = dlTarget(st), a = Math.min(1, dt*3);
+    st.cur.thr = st.cur.thr.map((v, i) => v + (tg.thr[i] - v)*a);
+    st.cur.r += (tg.r - st.cur.r)*a; st.cur.p += (tg.p - st.cur.p)*a; st.cur.lift += (tg.lift - st.cur.lift)*a;
+    if (st.demo === 'yaw') st.cur.y -= dt*.9; else { const y0 = Math.round(st.cur.y/(2*Math.PI))*2*Math.PI; st.cur.y += (y0 - st.cur.y)*a; }
+    const sp = st.cur.thr.reduce((x, y) => x + y, 0)/st.cur.thr.length; st.spin += dt*900*sp;
+    const idle = !st.demo && sp < .01 && Math.abs(st.cur.r) + Math.abs(st.cur.p) + st.cur.lift < .5 && Math.abs(st.cur.y % (2*Math.PI)) < .01;
+    if (idle){ st.cur = { r:0, p:0, y:0, lift:0, thr: st.cur.thr.map(() => 0) }; dlDemoOn = false; }
+    return !idle; });
+}
+
+ui = mountFigure({
+  fig: String(DL_DRONES.indexOf(DR) + 1).padStart(2, '0'), turn:'full', title: DR.name, credit:false,
+  size:[2*DR_M, 2*DR_M, DR_MH + DR_EXT.h*1.55], palette: DR.pal,
+  state:{ done:0, anim:1, demo:null, spin:0, sel:null, building:false, cur:{ r:0, p:0, y:0, lift:0, thr: DR_MOT.map(() => 0) } },
+  scene,
+  buttons:[
+    { label:'Drone', choices: () => DL_DRONES.filter(d => d.ready).map(d => ({ label: d.name, current: d.id === DR.id, onClick: () => { location.search = '?d=' + d.id; } })) },
+    { label:'Add next part', onClick: st => dlPlace(st) },
+    { label:'Remove last part', onClick: st => dlRemove(st) },
+    { label:'Build it all', onClick: st => dlBuildAll(st) },
+    { label:'Take apart', onClick: st => dlApart(st) },
+    { label:'How it flies', choices: st => [...Object.entries(DR_DEMOS).map(([k, d]) => ({ label: d.label, current: st.demo === k,
+        disabled: st.done < DR_STEPS.length, why: `Finish the build first: ${DR_STEPS.length - st.done} parts to go`, onClick: s => dlDemo(s, k) })),
+        { label:'Stop motors', disabled: !st.demo, why:'The motors are already stopped', onClick: s => dlDemo(s, null) }] },
+    { label:'Fly it', onClick: st => st.done < DR_STEPS.length ? ui.flash(`Finish the build first: ${DR_STEPS.length - st.done} parts to go (or Build it all)`) : (location.href = 'drone-flight.html?d=' + DR.id) },
+  ],
+  stats: st => [
+    { label:'Step', value: `${st.done}/${DR_STEPS.length}` },
+    { label:'Weight', value: dlFmtW(dlWeight(st)), small:true },
+    st.done >= DR_STEPS.length ? { label:'Thrust : weight', value: DR.fly.twr + ' : 1', small:true } : null ],
+  acts:{ part: (st, el) => { st.sel = st.sel === el.dataset.k ? null : el.dataset.k; } },
+  params: (st, q) => {
+    if (q.has('done')) st.done = q.get('done') === 'all' ? DR_STEPS.length : Math.max(0, Math.min(DR_STEPS.length, +q.get('done') | 0));
+    if (q.has('sel')) st.sel = q.get('sel');
+    if (q.has('demo') && st.done >= DR_STEPS.length){ st.demo = q.get('demo'); const tg = dlTarget(st); st.cur = { r: tg.r, p: tg.p, y: 0, lift: tg.lift, thr: tg.thr }; st.spin = 40; }
+  },
+});
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(), st = ui.st;
+  if (k === 'n' || k === ' ') dlPlace(st); else if (k === 'backspace') dlRemove(st); else if (k === 'f' && st.done >= DR_STEPS.length) location.href = 'drone-flight.html?d=' + DR.id; else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+// back to the hub, in the header
+document.querySelector('header').insertAdjacentHTML('beforeend', '<a href="drone-lab.html" style="color:#231e16;font-size:12px;letter-spacing:.08em;text-transform:uppercase">All drones</a>');
+</script></body></html>

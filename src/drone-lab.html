@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drone Lab</title>
+<style>
+  :root{--paper:#f2efe7;--ink:#231e16;--muted:#857d6e;--rule:#ddd6c8;--card:#fbf7ea}
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background-color:var(--paper);color:var(--ink);font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;padding:28px 16px 40px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .42  0 0 0 0 .39  0 0 0 0 .33  .16 0 0 0 0'/></filter><rect width='100%' height='100%' filter='url(%23p)'/></svg>")}
+  .wrap{max-width:1120px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;border-bottom:1.5px solid var(--ink);padding-bottom:10px}
+  h1{font-size:26px;margin:0;letter-spacing:-.01em}
+  header p{margin:0;color:var(--muted)}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:18px 0 26px}
+  .steps div{border:1.5px solid var(--ink);border-radius:12px;padding:10px 12px;background:var(--card);box-shadow:3px 3px 0 var(--ink)}
+  .steps b{display:inline-flex;width:22px;height:22px;border-radius:50%;background:#f4b829;border:1.5px solid var(--ink);align-items:center;justify-content:center;margin-right:6px;font-size:12px}
+  .steps p{margin:6px 0 0;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px}
+  .card{border:1.5px solid var(--ink);border-radius:14px;background:var(--card);box-shadow:4px 4px 0 var(--ink);display:flex;flex-direction:column;overflow:hidden}
+  .card svg{display:block;width:100%;height:190px;background:linear-gradient(#f2efe7,#e9e4d7);border-bottom:1.5px solid var(--ink)}
+  .card .bd{padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px;flex:1}
+  .card h2{margin:0;font-size:14px}
+  .card .cls{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .card p{margin:0;font-size:12.5px}
+  .card dl{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;margin:2px 0 0;font-size:11.5px}
+  .card dt{color:var(--muted)} .card dd{margin:0}
+  .card .row{display:flex;gap:8px;margin-top:auto;padding-top:6px;align-items:center}
+  .b{font:inherit;font-size:12px;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;text-decoration:none;box-shadow:2px 2px 0 var(--ink)}
+  .b.go{background:var(--ink);color:var(--paper)}
+  .b:hover{transform:translate(-1px,-1px);box-shadow:3px 3px 0 var(--ink)}
+  .badge{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;border:1.2px solid var(--ink);border-radius:999px;padding:1px 8px;background:#93d3b0}
+  .badge.soon{background:#e6e0d1}
+  .card.off svg{filter:saturate(.5)}
+  footer{margin-top:28px;border-top:1px solid var(--rule);padding-top:12px;color:var(--muted);font-size:12px}
+  @media (max-width:560px){body{padding:16px 12px 28px}h1{font-size:21px}}
+</style>
+</head><body>
+<div class="wrap">
+  <header><h1>Drone Lab</h1><p>Build it part by part. Learn why it flies. Then fly it, crash it, and try again for free.</p></header>
+  <div class="steps">
+    <div><b>1</b><strong>Build</strong><p>Put each drone together in the real order, from frame to props. Click any part to learn what it does; See-through shows the wiring inside.</p></div>
+    <div><b>2</b><strong>Understand</strong><p>"How it flies" spins the motors and shows differential thrust, torque cancellation and mixing on the model you just built.</p></div>
+    <div><b>3</b><strong>Fly</strong><p>Real stick layout (Mode 2), Betaflight-style rates, motor lag, battery sag and crashes. Plug in your radio as a USB joystick to train on the real thing.</p></div>
+  </div>
+  <div class="grid" id="grid"></div>
+  <footer>Works offline. Progress and settings stay in this browser. Keyboard: W/S throttle, A/D yaw, arrows pitch and roll, Enter arms.</footer>
+</div>
+<script src="core.js"></script>
+<script src="drones-data.js"></script>
+<script src="drone-draw.js"></script>
+<script>
+/* Hub: one card per drone with a thumbnail drawn by the same model as the assembly figure. */
+function thumb(D, n){
+  DD_O = [0, 0, 0]; DD_T = { r:0, p:0, y:0, zc:0, lift:0 }; RC = [0, 0]; RCZ = 0; OX = OY = 0; setCam(YAW0 + 8, PITCH0);
+  let items, shadowPts;
+  if (D.ready){ const mod = ddModel(D, { show: () => 1, drop: 0, spin: 20 }); items = mod.items; shadowPts = mod.shadow; }
+  else { const parts = D.id === 'wing' ? ddWingThumb(D) : ddVtolThumb(D); items = parts.map(p => ({ box: ddBB(p.pts), svg: p.svg })); shadowPts = parts.flatMap(p => p.pts); }
+  const pts = items.flatMap(it => { const [a, b] = it.box; return [P(a[0], a[1], a[2]), P(b[0], b[1], b[2]), P(a[0], b[1], a[2]), P(b[0], a[1], b[2])]; });
+  const x0 = Math.min(...pts.map(p => p[0])), x1 = Math.max(...pts.map(p => p[0])), y0 = Math.min(...pts.map(p => p[1])), y1 = Math.max(...pts.map(p => p[1]));
+  const w = x1 - x0, h = y1 - y0, vw = Math.max(w*1.18, h*1.18*250/190), vh = vw*190/250, vx = (x0 + x1)/2 - vw/2, vy = (y0 + y1)/2 - vh/2 + vh*.03;
+  INK_K = vw/INK_REF_VB;
+  const shadow = `<g opacity=".45">${castShadow(shadowPts.map(p => [p[0], p[1], p[2]]), 0)}</g>`;
+  const body = inkScale(shadow + byDepth(items.map(it => ({ box: it.box, svg: it.svg }))));
+  const fl = filterFor(INK_K).replace('id="hand"', `id="hand${n}"`).replace('id="wob"', `id="wob${n}"`);
+  return `<svg viewBox="${f(vx)} ${f(vy)} ${f(vw)} ${f(vh)}" role="img" aria-label="${D.name}"><defs>${fl}</defs><g filter="url(#hand${n})">${body}</g></svg>`;
+}
+const built = id => { try { return localStorage.getItem('dl-built-' + id) === '1'; } catch (e) { return false; } };
+const grid = document.getElementById('grid');
+DL_DRONES.forEach((D, i) => {
+  const c = document.createElement('div'); c.className = 'card' + (D.ready ? '' : ' off');
+  const badge = D.ready ? (built(D.id) ? '<span class="badge">Built</span>' : '') : '<span class="badge soon">In the hangar</span>';
+  c.innerHTML = thumb(D, i) + `<div class="bd"><div class="cls">${D.cls}</div><h2>${D.name}</h2><p>${D.blurb}</p>
+    <dl>${D.facts.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>
+    <div class="row">${D.ready ? `<a class="b go" href="drone-assembly.html?d=${D.id}">Build</a><a class="b" href="drone-flight.html?d=${D.id}">Fly</a>` : '<span style="font-size:12px;color:#857d6e">Fixed-wing flight model coming next</span>'} <span style="flex:1"></span>${badge}</div></div>`;
+  grid.appendChild(c);
+});
+</script>
+</body></html>

@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Drone Lab: flight</title>
+<style>
+  :root{--paper:#f2efe7;--ink:#231e16;--muted:#857d6e;--acc:#f4b829}
+  *{box-sizing:border-box} html,body{margin:0;height:100%;overflow:hidden;background:var(--paper);color:var(--ink);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}
+  #cv{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  #bar{position:fixed;top:8px;left:8px;right:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;z-index:3;pointer-events:none}
+  #bar > *{pointer-events:auto}
+  #bar h1{font-size:12px;letter-spacing:.06em;margin:0 6px 0 2px;text-transform:uppercase;background:var(--paper);padding:3px 8px;border-radius:6px}
+  .b,select{font:inherit;font-size:12px;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:4px 12px;cursor:pointer;box-shadow:2px 2px 0 var(--ink)}
+  select{padding:4px 8px;border-radius:8px;appearance:none}
+  .b[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+  .b:active{transform:translate(1px,1px);box-shadow:1px 1px 0 var(--ink)}
+  .sp{flex:1}
+  .card{position:fixed;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,calc(100vw - 32px));max-height:calc(100vh - 80px);overflow:auto;
+    background:#fbf7ea;border:2px solid var(--ink);border-radius:14px;box-shadow:4px 4px 0 var(--ink);padding:16px 18px}
+  .card[hidden]{display:none}
+  .card h2{margin:0 0 8px;font-size:13px;letter-spacing:.1em;text-transform:uppercase}
+  .card h3{margin:14px 0 6px;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .card p,.card li{font-size:12.5px;line-height:1.5;margin:4px 0}
+  .card ul{padding-left:18px;margin:4px 0}
+  .card kbd{border:1px solid var(--ink);border-bottom-width:2px;border-radius:4px;padding:0 4px;font:inherit;font-size:11.5px;background:#fff}
+  .card .x{position:absolute;right:12px;top:10px}
+  .grid{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;align-items:center}
+  .grid label{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .grid input[type=range]{width:100%;accent-color:var(--ink)}
+  .grid output{min-width:52px;text-align:right;font-weight:700}
+  .axes{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
+  .axes div{font-size:11px;border:1px solid var(--rule,#ddd6c8);border-radius:6px;padding:3px 5px;position:relative;overflow:hidden}
+  .axes i{position:absolute;left:50%;top:0;bottom:0;background:var(--acc);opacity:.6}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:4px 0}
+  @media (max-width:640px){#bar h1{display:none}.b,select{font-size:11px;padding:3px 9px}}
+</style>
+</head><body>
+<canvas id="cv"></canvas>
+<div id="bar">
+  <h1>Drone Lab</h1>
+  <select id="selDrone" aria-label="Drone"></select>
+  <select id="selEnv" aria-label="Environment"></select>
+  <button class="b" id="bView">View: Chase</button>
+  <button class="b" id="bMode">Mode: Acro</button>
+  <button class="b" id="bArm">Arm</button>
+  <button class="b" id="bReset">Reset</button>
+  <span class="sp"></span>
+  <button class="b" id="bHow">How it flies</button>
+  <button class="b" id="bSet">Settings</button>
+  <button class="b" id="bHelp">Controls</button>
+  <a class="b" id="bBuild" href="#" style="text-decoration:none">Build</a>
+  <a class="b" href="drone-lab.html" style="text-decoration:none">All drones</a>
+</div>
+
+<div class="card" id="help" hidden>
+  <button class="b x" data-close>Close</button>
+  <h2>Flying controls</h2>
+  <p>The two sticks work exactly like a real radio in <b>Mode 2</b>: the left stick is throttle (up/down) and yaw (left/right); the right stick is pitch (up/down) and roll (left/right).</p>
+  <h3>Radio transmitter or gamepad (best)</h3>
+  <p>Plug a radio (EdgeTX/OpenTX in USB Joystick mode) or a gamepad in and move a stick. Radios are detected as AETR (roll, pitch, throttle, yaw) with the arm switch on channel 5; check or change the mapping in Settings. Practising on your real radio is what makes the skill transfer.</p>
+  <h3>Touch / mouse</h3>
+  <p>Drag the two stick pads in the bottom corners. In Acro and Angle the throttle stays where you leave it, like a real radio; in GPS modes it springs back to the middle (hold height).</p>
+  <h3>Keyboard</h3>
+  <ul>
+    <li><kbd>W</kbd>/<kbd>S</kbd> throttle (stays put in Acro/Angle) &nbsp; <kbd>A</kbd>/<kbd>D</kbd> yaw</li>
+    <li><kbd>&uarr;</kbd>/<kbd>&darr;</kbd> pitch &nbsp; <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> roll &nbsp; (or <kbd>I</kbd><kbd>K</kbd><kbd>J</kbd><kbd>L</kbd>)</li>
+    <li><kbd>Enter</kbd> arm / disarm &nbsp; <kbd>R</kbd> reset (fresh battery) &nbsp; <kbd>V</kbd> camera view &nbsp; <kbd>M</kbd> flight mode &nbsp; <kbd>P</kbd> pause</li>
+  </ul>
+  <h3>Flight modes</h3>
+  <ul>
+    <li><b>Acro (rate)</b>: what FPV pilots fly. The sticks set how fast it rotates; centre the stick and it holds whatever angle it is at. Nothing levels it for you.</li>
+    <li><b>Angle</b>: the sticks set the tilt angle and it levels itself when you let go. A good first step.</li>
+    <li><b>GPS / Sport / Cine</b>: camera drones. Sticks set speed; let go and it brakes and holds its spot and height.</li>
+  </ul>
+  <h3>Like the real thing</h3>
+  <p>To arm, the throttle must be at the bottom and the drone level (Betaflight refuses otherwise). Props spin at idle once armed. Crashes happen above a real impact speed; R puts on a fresh battery.</p>
+</div>
+
+<div class="card" id="how" hidden>
+  <button class="b x" data-close>Close</button>
+  <h2>How it stays in the air</h2>
+  <p><b>Thrust.</b> Each prop pushes air down and the drone up. When the total thrust equals the weight it hovers; more and it climbs. The throttle stick sets this total.</p>
+  <p><b>Differential thrust.</b> To tilt, the flight controller makes some motors push harder than others. Rear motors faster: the nose dips and the drone flies forward. Left motors faster: it rolls right. The drone moves by leaning its thrust, like a helicopter.</p>
+  <p><b>Torque cancellation.</b> Spinning a prop twists the frame the opposite way. Half the props spin clockwise and half counter-clockwise, so at a hover the twists cancel. To yaw, the FC speeds up one set and slows the other: total thrust stays the same but the twists no longer cancel, so the frame turns.</p>
+  <p><b>Mixing.</b> Every motor gets: throttle + pitch share + roll share + yaw share. The panel at the bottom shows it live: each circle is a motor, its fill is how hard it is working, its ring colour is its spin direction (red clockwise, blue counter-clockwise from above).</p>
+  <p><b>The gyro loop.</b> The flight controller measures rotation thousands of times a second and keeps correcting the motors (the PID loop). Motors cannot change speed instantly: big props on a heavy drone react slowly, a 5-inch reacts in hundredths of a second. You feel that difference here.</p>
+</div>
+
+<div class="card" id="set" hidden>
+  <button class="b x" data-close>Close</button>
+  <h2>Settings</h2>
+  <h3>Rates (roll &amp; pitch), Betaflight "Actual" style</h3>
+  <div class="grid">
+    <label for="rC">Centre sensitivity</label><input id="rC" type="range" min="50" max="400" step="10"><output id="oC"></output>
+    <label for="rM">Max rate</label><input id="rM" type="range" min="100" max="1200" step="10"><output id="oM"></output>
+    <label for="rE">Expo</label><input id="rE" type="range" min="0" max="0.95" step="0.01"><output id="oE"></output>
+    <label for="rY">Yaw max rate</label><input id="rY" type="range" min="60" max="1000" step="10"><output id="oY"></output>
+  </div>
+  <h3>Camera &amp; world</h3>
+  <div class="grid">
+    <label for="rU">FPV camera uptilt</label><input id="rU" type="range" min="-40" max="60" step="1"><output id="oU"></output>
+    <label for="rF">FPV field of view</label><input id="rF" type="range" min="70" max="140" step="1"><output id="oF"></output>
+    <label for="sW">Wind</label><select id="sW"><option value="0">Calm</option><option value="1">Light breeze</option><option value="2">Gusty</option></select><span></span>
+    <label for="sS">Stick mode</label><select id="sS"><option value="2">Mode 2 (throttle left)</option><option value="1">Mode 1 (throttle right)</option></select><span></span>
+    <label for="cA">Motor sound</label><input id="cA" type="checkbox" style="justify-self:start"><span></span>
+  </div>
+  <h3>Controller mapping <span id="gpName" style="text-transform:none;letter-spacing:0"></span></h3>
+  <div class="grid" id="mapGrid"></div>
+  <div class="axes" id="axes"></div>
+  <div class="row"><button class="b" id="bDefaults">Reset rates for this drone</button></div>
+</div>
+
+<script src="core.js"></script>
+<script src="drones-data.js"></script>
+<script>
+(() => {
+/* Drone Lab flight simulator.
+   Physics (240 Hz): rigid body with gravity, quadratic drag, per-motor thrust with first-order spin-up lag, prop
+   reaction torque for yaw, battery sag. Control: the same loops a real flight controller runs (rate PID in Acro;
+   self-levelling in Angle; velocity + altitude hold in GPS modes) and a real mixer (throttle + roll + pitch + yaw
+   shares per motor, clipped like airmode). Rendering: a small painter's-algorithm 3D engine on a canvas, drawn in
+   flat light/mid/dark tones with ink outlines to match the Colorfigures assembly view. World units are metres;
+   x east, y north, z up; body frame x forward, y left, z up. */
+const Q = new URLSearchParams(location.search);
+const G = 9.81, DT = 1/240;
+const add = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], sb = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]], sc = (a, k) => [a[0]*k, a[1]*k, a[2]*k];
+const dt3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2], cr = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]), nz = a => { const l = len(a) || 1; return [a[0]/l, a[1]/l, a[2]/l]; };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const mv = (m, v) => [m[0]*v[0]+m[1]*v[1]+m[2]*v[2], m[3]*v[0]+m[4]*v[1]+m[5]*v[2], m[6]*v[0]+m[7]*v[1]+m[8]*v[2]];
+const mtv = (m, v) => [m[0]*v[0]+m[3]*v[1]+m[6]*v[2], m[1]*v[0]+m[4]*v[1]+m[7]*v[2], m[2]*v[0]+m[5]*v[1]+m[8]*v[2]];
+const mm = (a, b) => { const o = Array(9); for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) o[r*3+c] = a[r*3]*b[c] + a[r*3+1]*b[3+c] + a[r*3+2]*b[6+c]; return o; };
+const rotZ = t => [Math.cos(t), -Math.sin(t), 0, Math.sin(t), Math.cos(t), 0, 0, 0, 1];
+function orthon(m){   // Gram-Schmidt on the columns (body axes)
+  let x = nz([m[0], m[3], m[6]]), y = [m[1], m[4], m[7]]; y = nz(sb(y, sc(x, dt3(x, y)))); const z = cr(x, y);
+  return [x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2]]; }
+function expW(w, dt){ const th = len(w)*dt; if (th < 1e-9) return [1,0,0,0,1,0,0,0,1];
+  const k = nz(w), s = Math.sin(th), c = 1 - Math.cos(th), K = [0, -k[2], k[1], k[2], 0, -k[0], -k[1], k[0], 0], K2 = mm(K, K);
+  return [0,1,2,3,4,5,6,7,8].map(i => (i % 4 === 0 ? 1 : 0) + s*K[i] + c*K2[i]); }
+let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+const store = { get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }, set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+/* ---------- materials: flat light / mid / dark like the assembly view ---------- */
+const MT = hex => ({ l: hex, m: mix(hex, '#000000', .16), d: mix(hex, '#000000', .38) });
+const MAT = { grass: MT('#9fcf8a'), grass2: MT('#8cc078'), dirt: MT('#cfb88a'), wood: MT('#c99a5b'), bark: MT('#8a6440'), leaf: MT('#5fa86a'), leaf2: MT('#4b9460'),
+  hay: MT('#f0cf6a'), white: MT('#f6f3ea'), red: MT('#e2483d'), yellow: MT('#f4b829'), blue: MT('#5a82c6'), concrete: MT('#d8d3c6'), glass: MT('#9fc4d6'),
+  brick: MT('#d98a62'), mint: MT('#93d3b0'), dark: MT('#4a4642'), asphalt: MT('#8f8b84'), steel: MT('#c6ccce'), pink: MT('#f3a6bb'), rug: MT('#c9605a'), sofa: MT('#6f8fc8'), wall: MT('#efe6d2') };
+const SUN = nz([-.45, .35, .82]);
+const toneOf = (n, m) => { const d = dt3(n, SUN); return d > .5 ? m.l : d > -.05 ? m.m : m.d; };
+
+/* ---------- world objects: lists of convex faces with outward normals ---------- */
+function solid(faces, mat, opt = {}){
+  const all = faces.flat(), c = all.reduce((a, p) => add(a, sc(p, 1/all.length)), [0,0,0]);
+  const F = faces.map(p => { let n = newell(p); if (dt3(n, sb(p.reduce((a, q) => add(a, q), [0,0,0]).map(v => v/p.length), c)) < 0) n = sc(n, -1); return { p, n, mat: opt.mat2 && opt.mat2(p, n) || mat }; });
+  const mn = [0,1,2].map(i => Math.min(...all.map(p => p[i]))), mx = [0,1,2].map(i => Math.max(...all.map(p => p[i])));
+  return { faces: F, mn, mx, c: sc(add(mn, mx), .5), r: len(sb(mx, mn))/2, bg: !!opt.bg, gate: opt.gate };
+}
+function newell(q){ let x = 0, y = 0, z = 0; for (let i = 0; i < q.length; i++){ const a = q[i], b = q[(i+1) % q.length]; x += (a[1]-b[1])*(a[2]+b[2]); y += (a[2]-b[2])*(a[0]+b[0]); z += (a[0]-b[0])*(a[1]+b[1]); } return nz([x, y, z]); }
+function prismF(poly, z0, z1, bottom = false){ const n = poly.length, F = [poly.map(([x, y]) => [x, y, z1]).reverse()];
+  if (bottom) F.push(poly.map(([x, y]) => [x, y, z0]));
+  for (let i = 0; i < n; i++){ const a = poly[i], b = poly[(i+1) % n]; F.push([[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]]); }
+  return F; }
+const rectP = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+const circP = (x, y, r, n = 8, a0 = 0) => Array.from({ length:n }, (_, i) => { const a = a0 + i/n*2*Math.PI; return [x + r*Math.cos(a), y + r*Math.sin(a)]; });
+const boxO = (x0, y0, z0, x1, y1, z1, mat, opt) => solid(prismF(rectP(x0, y0, x1, y1), z0, z1, z0 > .01), mat, opt);
+const cylO = (x, y, z0, z1, r, mat, n = 8, opt) => solid(prismF(circP(x, y, r, n), z0, z1, z0 > .01), mat, opt);
+function coneO(x, y, z0, z1, r, mat, n = 8){ const base = circP(x, y, r, n).map(([u, v]) => [u, v, z0]), top = [x, y, z1], F = [];
+  for (let i = 0; i < n; i++) F.push([base[i], base[(i+1) % n], top]); F.push(base.slice().reverse()); return solid(F, mat); }
+// a box turned to angle a (rad) about z, centred (cx, cy)
+const rotBoxO = (cx, cy, a, l, w, z0, z1, mat, opt) => { const c = Math.cos(a), s = Math.sin(a);
+  return solid(prismF([[-l/2, -w/2], [l/2, -w/2], [l/2, w/2], [-l/2, w/2]].map(([u, v]) => [cx + u*c - v*s, cy + u*s + v*c]), z0, z1, z0 > .01), mat, opt); };
+
+/* ---------- environments ---------- */
+function gateObjs(W, gate, mat){   // a square gate: two posts, a top and a bottom bar, facing along angle a
+  const { c, a, w, h, t = .12 } = gate, ca = Math.cos(a), sa = Math.sin(a), out = [];
+  const piece = (u0, u1, z0, z1) => { const cx = c[0] - sa*(u0 + u1)/2, cy = c[1] + ca*(u0 + u1)/2; out.push(rotBoxO(cx, cy, a, t, u1 - u0, z0, z1, mat, { gate }));
+    W.col.push({ t:'obox', c:[cx, cy], a, hx: t/2, hy: (u1 - u0)/2, z0, z1 }); };
+  const zb = c[2] - h/2, zt = c[2] + h/2;
+  piece(-w/2 - t, -w/2, 0, zt + t); piece(w/2, w/2 + t, 0, zt + t); piece(-w/2, w/2, zt, zt + t); if (zb > .05) piece(-w/2, w/2, zb - t, zb);
+  return out; }
+function world(id){
+  seed = 11;
+  const W = { id, objs:[], col:[], decals:[], tufts:[], gates:[], sky:'#dfe8e6', haze:'#ece9df', ground:'#a9d394', far:320, spawn:{ p:[0, 0], yaw:0 }, pilot:[-6, -4, 1.6], hills:true };
+  const O = o => { W.objs.push(o); return o; }, colBox = (x0, y0, z0, x1, y1, z1) => W.col.push({ t:'box', mn:[x0, y0, z0], mx:[x1, y1, z1] });
+  const tree = (x, y, s = 1, alt = false) => { const h = 3.2*s;
+    O(cylO(x, y, 0, h*.45, .22*s, MAT.bark, 5)); O(coneO(x, y, h*.3, h*.85, 1.5*s, alt ? MAT.leaf2 : MAT.leaf, 7)); O(coneO(x, y, h*.62, h*1.25, 1.05*s, alt ? MAT.leaf : MAT.leaf2, 6));
+    W.col.push({ t:'cyl', x, y, r:.22*s, z0:0, z1:h*.45 }, { t:'sph', c:[x, y, h*.62], r:1.25*s }, { t:'sph', c:[x, y, h*.98], r:.8*s }); };
+  const tufts = (n, R, avoid = () => false) => { for (let i = 0; i < n; i++){ const x = (rnd()*2 - 1)*R, y = (rnd()*2 - 1)*R; if (!avoid(x, y)) W.tufts.push([x, y]); } };
+  const stripes = (R, w, col) => { for (let x = -R; x < R; x += 2*w) W.decals.push({ p: rectP(x, -R, x + w, R).map(([u, v]) => [u, v, 0]), col }); };
+  const pad = (x, y, s = 1) => { W.decals.push({ p: rectP(x - s, y - s, x + s, y + s).map(([u, v]) => [u, v, 0]), col:'#d8c49a', ink:true });
+    W.decals.push({ p: circP(x, y, s*.7, 16).map(([u, v]) => [u, v, 0]), col:'#efe3c4', ink:true }); };
+  const fence = R => { for (let i = -R; i <= R; i += 6) for (const [x, y] of [[i, -R], [i, R], [-R, i], [R, i]]){ O(boxO(x - .08, y - .08, 0, x + .08, y + .08, 1.2, MAT.wood)); colBox(x - .08, y - .08, 0, x + .08, y + .08, 1.2); }
+    for (const s of [-1, 1]){ O(boxO(-R, s*R - .04, .85, R, s*R + .04, 1, MAT.wood)); O(boxO(s*R - .04, -R, .85, s*R + .04, R, 1, MAT.wood)); colBox(-R, s*R - .04, .85, R, s*R + .04, 1); colBox(s*R - .04, -R, .85, s*R + .04, R, 1); } };
+  if (id === 'field' || id === 'course' || id === 'race'){
+    stripes(90, 6, '#b3da9e'); tufts(1400, 90, (x, y) => Math.abs(x) < 2 && Math.abs(y) < 2); pad(0, 0); fence(90);
+    for (const [x, y, s] of [[40, 30, 1.3], [-35, 45, 1.1], [55, -40, 1.5], [-60, -30, 1.2], [70, 60, 1.4], [-70, 70, 1]]) tree(x, y, s, rnd() > .5);
+  }
+  if (id === 'field'){
+    for (const [x, y] of [[14, 8], [16, 10.5], [20, -6], [-12, 14], [-16, -10], [9, -15]]){ O(cylO(x, y, 0, 1.2, .75, MAT.hay, 10)); W.col.push({ t:'cyl', x, y, r:.75, z0:0, z1:1.2 }); }
+    O(boxO(-30, -12, 0, -22, -4, 3.2, MAT.red)); colBox(-30, -12, 0, -22, -4, 3.2);
+    O(solid([[[-30, -12, 3.2], [-22, -12, 3.2], [-22, -8, 4.6], [-30, -8, 4.6]], [[-22, -4, 3.2], [-30, -4, 3.2], [-30, -8, 4.6], [-22, -8, 4.6]], [[-30, -12, 3.2], [-30, -8, 4.6], [-30, -4, 3.2]], [[-22, -4, 3.2], [-22, -8, 4.6], [-22, -12, 3.2]]], MAT.dark));
+    colBox(-30, -12, 3.2, -22, -4, 4.6);
+    O(cylO(8, 20, 0, 6, .06, MAT.steel, 5)); O(coneO(8, 20, 5.3, 6, .35, MAT.red, 6)); W.col.push({ t:'cyl', x:8, y:20, r:.06, z0:0, z1:6 });
+  }
+  if (id === 'course'){
+    W.spawn.yaw = 0;
+    for (let i = 0; i < 6; i++){ const x = 8 + i*5, y = (i % 2 ? 2 : -2); O(cylO(x, y, 0, 3, .1, i % 2 ? MAT.red : MAT.white, 6)); W.col.push({ t:'cyl', x, y, r:.1, z0:0, z1:3 }); }
+    const gs = [{ c:[45, 0, 1.6], a:0, w:2.4, h:2.4 }, { c:[60, 12, 3.5], a:Math.PI/2, w:2, h:2 }, { c:[50, 28, 1.2], a:Math.PI, w:2.6, h:1.6 }, { c:[30, 30, 5], a:Math.PI, w:2.4, h:2.4 }, { c:[12, 22, 1.5], a:-Math.PI*.75, w:2.4, h:2 }];
+    // a wall with a window, a tunnel, a high bar on poles
+    O(boxO(20, 26, 0, 20.3, 34, 8, MAT.brick)); colBox(20, 26, 0, 20.3, 34, 8);
+    O(boxO(30.5, 25, 0, 31, 28.5, 7, MAT.concrete)); O(boxO(30.5, 31.5, 0, 31, 35, 7, MAT.concrete)); O(boxO(30.5, 28.5, 0, 31, 31.5, 4, MAT.concrete)); O(boxO(30.5, 28.5, 6, 31, 31.5, 7, MAT.concrete));
+    colBox(30.5, 25, 0, 31, 28.5, 7); colBox(30.5, 31.5, 0, 31, 35, 7); colBox(30.5, 28.5, 0, 31, 31.5, 4); colBox(30.5, 28.5, 6, 31, 31.5, 7);
+    O(boxO(54, 26.6, 0, 58, 26.9, 2.2, MAT.blue)); O(boxO(54, 29.1, 0, 58, 29.4, 2.2, MAT.blue)); O(boxO(54, 26.6, 2.2, 58, 29.4, 2.5, MAT.blue));
+    colBox(54, 26.6, 0, 58, 26.9, 2.2); colBox(54, 29.1, 0, 58, 29.4, 2.2); colBox(54, 26.6, 2.2, 58, 29.4, 2.5);
+    gs.splice(2, 1, { c:[56, 28, 1.1], a:Math.PI, w:2.2, h:2.2, t:.05, hidden:true });
+    gs.splice(3, 1, { c:[30.75, 30, 5], a:Math.PI, w:3, h:2, t:.05, hidden:true });
+    W.gates = gs; gs.forEach(g => { if (!g.hidden) gateObjs(W, g, MAT.blue).forEach(O); });
+  }
+  if (id === 'race'){
+    const gs = [];
+    const path = [[18, 0, 0], [40, 6, .3], [58, 22, 1.2], [56, 44, 2.2], [34, 52, 3.1], [12, 44, 3.6], [-2, 26, 4.4], [4, 8, 5.6]];
+    path.forEach(([x, y, a], i) => gs.push({ c:[x, y, i === 4 ? 6 : 1.4], a, w: 2.4, h: 1.8 }));
+    O(boxO(32, 50.6, 0, 36, 53.4, 5, MAT.steel)); colBox(32, 50.6, 0, 36, 53.4, 5);
+    gs[4].c[2] = 6.1;
+    gs.forEach((g, i) => { const a = gs[(i + gs.length - 1) % gs.length].c, b = gs[(i + 1) % gs.length].c; g.a = Math.atan2(b[1] - a[1], b[0] - a[0]); });
+    W.gates = gs; gs.forEach(g => gateObjs(W, g, MAT.pink).forEach(O));
+    for (const [x, y] of [[26, 4], [48, 14], [64, 34], [24, 52], [4, 36]]){ O(cylO(x, y, 0, 3.5, .05, MAT.steel, 5)); O(boxO(x - .02, y, 2.5, x + .02, y + 1, 3.4, MAT.yellow)); W.col.push({ t:'cyl', x, y, r:.06, z0:0, z1:3.5 }); }
+  }
+  if (id === 'city'){
+    W.ground = '#b7b2a6'; W.sky = '#dde6ea'; W.hills = false; W.spawn = { p:[0, 0], yaw:0 }; W.pilot = [-5, -6, 1.6];
+    const block = 34, road = 12;
+    for (let i = -3; i <= 3; i++){ W.decals.push({ p: rectP(i*(block + road) - road/2, -170, i*(block + road) + road/2, 170).map(([u, v]) => [u, v, 0]), col:'#8f8b84' });
+      W.decals.push({ p: rectP(-170, i*(block + road) - road/2, 170, i*(block + road) + road/2).map(([u, v]) => [u, v, 0]), col:'#8f8b84' });
+      for (let k = -170; k < 170; k += 6){ W.decals.push({ p: rectP(i*(block + road) - .08, k, i*(block + road) + .08, k + 3).map(([u, v]) => [u, v, .01]), col:'#f2efe7' });
+        W.decals.push({ p: rectP(k, i*(block + road) - .08, k + 3, i*(block + road) + .08).map(([u, v]) => [u, v, .01]), col:'#f2efe7' }); } }
+    const cols = [MAT.brick, MAT.concrete, MAT.white, MAT.mint, MAT.yellow, MAT.blue];
+    for (let i = -3; i < 3; i++) for (let j = -3; j < 3; j++){
+      const x0 = i*(block + road) + road/2, y0 = j*(block + road) + road/2;
+      for (const [u, v] of [[0, 0], [block/2 + 1, 0], [0, block/2 + 1], [block/2 + 1, block/2 + 1]]){
+        if (rnd() < .15) { tree(x0 + u + 8, y0 + v + 8, 1.4, rnd() > .5); continue; }
+        const bx0 = x0 + u + 1.5, by0 = y0 + v + 1.5, bx1 = bx0 + block/2 - 4, by1 = by0 + block/2 - 4, h = 6 + Math.floor(rnd()*9)*4, m = cols[Math.floor(rnd()*cols.length)];
+        const bo = O(boxO(bx0, by0, 0, bx1, by1, h, m)); colBox(bx0, by0, 0, bx1, by1, h);
+        // window bands on every face
+        // window bands: faces wound counter-clockwise round the building, so their normals face out
+        for (let z = 3; z < h - 1; z += 4){ for (const [a0, a1] of [[[bx0, by0 - .02], [bx1, by0 - .02]], [[bx1 + .02, by0], [bx1 + .02, by1]], [[bx1, by1 + .02], [bx0, by1 + .02]], [[bx0 - .02, by1], [bx0 - .02, by0]]]){
+          const dx = (a1[0] - a0[0]), dy = (a1[1] - a0[1]);
+          // part of the building's own face list, so they always draw just after the wall they sit on
+          const wp = [[a0[0] + dx*.08, a0[1] + dy*.08, z], [a0[0] + dx*.92, a0[1] + dy*.92, z], [a0[0] + dx*.92, a0[1] + dy*.92, z + 1.4], [a0[0] + dx*.08, a0[1] + dy*.08, z + 1.4]];
+          bo.faces.push({ p: wp, n: newell(wp), mat: MAT.glass }); } }
+        if (h > 14) { O(boxO(bx0 + 3, by0 + 3, h, bx0 + 6, by0 + 5, h + 1.5, MAT.steel)); colBox(bx0 + 3, by0 + 3, h, bx0 + 6, by0 + 5, h + 1.5); }
+      } }
+    tufts(500, 160);
+  }
+  if (id === 'forest'){
+    W.ground = '#8fbf7a'; W.far = 130; W.haze = '#e2e8da';
+    tufts(1800, 80, (x, y) => false);
+    for (let i = 0; i < 170; i++){ const x = (rnd()*2 - 1)*85, y = (rnd()*2 - 1)*85;
+      if (Math.hypot(x, y) < 9 || (Math.abs(y - x*.3) < 3.5 && x > 0)) continue; tree(x, y, .8 + rnd()*1.1, rnd() > .5); }
+    for (let i = 0; i < 12; i++){ const x = (rnd()*2 - 1)*70, y = (rnd()*2 - 1)*70; if (Math.hypot(x, y) < 9) continue; const r = .4 + rnd()*.8; O(cylO(x, y, 0, r*1.1, r, MAT.concrete, 6)); W.col.push({ t:'cyl', x, y, r, z0:0, z1:r*1.1 }); }
+    O(rotBoxO(6, -5, .4, 7, .5, 0, .5, MAT.bark)); W.col.push({ t:'obox', c:[6, -5], a:.4, hx:3.5, hy:.25, z0:0, z1:.5 });
+    W.decals.push({ p: [[0, -1.6, 0], [90, 25.4, 0], [90, 29.4, 0], [0, 1.6, 0]], col:'#c8b48a' });
+    pad(0, 0);
+  }
+  if (id === 'room'){
+    W.ground = '#d9a86c'; W.sky = '#efe6d2'; W.hills = false; W.far = 60; W.haze = '#efe6d2'; W.spawn = { p:[0, 0], yaw:0 }; W.pilot = [-2.4, -1.8, 1.2];
+    const RX = 3.2, RY = 2.6, RZ = 2.6;
+    for (let x = -RX; x < RX; x += .18) W.decals.push({ p: rectP(x, -RY, x + .012, RY).map(([u, v]) => [u, v, .001]), col:'#b98a52' });
+    const wall = (x0, y0, z0, x1, y1, z1, m) => { O(boxO(x0, y0, z0, x1, y1, z1, m, { bg:true })); colBox(x0, y0, z0, x1, y1, z1); };
+    wall(-RX - .2, -RY - .2, 0, RX + .2, -RY, RZ, MAT.wall); wall(-RX - .2, RY, 0, RX + .2, RY + .2, RZ, MAT.wall);
+    wall(-RX - .2, -RY, 0, -RX, RY, RZ, MAT.mint); wall(RX, -RY, 0, RX + .2, RY, RZ, MAT.wall); wall(-RX - .2, -RY - .2, RZ, RX + .2, RY + .2, RZ + .2, MAT.white);
+    const furn = (x0, y0, z0, x1, y1, z1, m) => { O(boxO(x0, y0, z0, x1, y1, z1, m)); colBox(x0, y0, z0, x1, y1, z1); };
+    W.decals.push({ p: rectP(-1.2, -1, 1.2, 1).map(([u, v]) => [u, v, .003]), col:'#c9605a', ink:true });
+    furn(-.5, 1.2, 0, 1.5, 2.4, .45, MAT.sofa); furn(-.5, 2.1, .45, 1.5, 2.4, .9, MAT.sofa); furn(-.7, 1.2, 0, -.5, 2.4, .65, MAT.sofa); furn(1.5, 1.2, 0, 1.7, 2.4, .65, MAT.sofa);
+    furn(-.4, -.4, .38, .6, .3, .44, MAT.wood); for (const [x, y] of [[-.35, -.35], [.55, -.35], [-.35, .25], [.55, .25]]) furn(x - .03, y - .03, 0, x + .03, y + .03, .38, MAT.bark);
+    furn(2.6, -2.5, 0, 3.15, -.6, 1.9, MAT.wood); for (const z of [.5, 1, 1.45]) furn(2.55, -2.5, z, 2.6, -.6, z + .03, MAT.bark);
+    furn(-3.1, -2.5, 0, -2.4, -2, .75, MAT.white); furn(-2.9, -2.4, .75, -2.55, -2.1, 1.2, MAT.yellow);
+    O(cylO(-2.6, 1.9, 0, .35, .25, MAT.red, 8)); O(coneO(-2.6, 1.9, .35, 1.4, .3, MAT.leaf, 7)); W.col.push({ t:'cyl', x:-2.6, y:1.9, r:.3, z0:0, z1:1.4 });
+    // two small gates to fly through
+    W.gates = [{ c:[1.6, -1.2, 1.3], a:0, w:.6, h:.6, t:.04 }, { c:[-1.2, -1.8, 1.6], a:Math.PI, w:.6, h:.6, t:.04 }];
+    W.gates.forEach(g => gateObjs(W, g, MAT.pink).forEach(o => { O(o); }));
+    W.spawn.p = [-1.8, .2];
+  }
+  if (W.hills){ const n = 28; for (let i = 0; i < n; i++){ const a0 = i/n*2*Math.PI, a1 = (i + 1)/n*2*Math.PI, R = 600, h = 25 + 35*Math.abs(Math.sin(i*1.7));
+    O(solid([[[R*Math.cos(a0), R*Math.sin(a0), 0], [R*Math.cos(a1), R*Math.sin(a1), 0], [R*.98*Math.cos((a0 + a1)/2), R*.98*Math.sin((a0 + a1)/2), h]]], MAT.leaf2, { bg:true })); }
+    for (const o of W.objs) if (o.bg && o.faces.length === 1){ const fc = o.faces[0]; if (dt3(fc.n, nz([-o.c[0], -o.c[1], 0])) < 0) fc.n = sc(fc.n, -1); } }
+  return W;
+}
+const ENVS = [['field', 'Open field'], ['course', 'Obstacle course'], ['race', 'Race gates'], ['city', 'City blocks'], ['forest', 'Forest'], ['room', 'Living room (whoops)']];
+
+/* ---------- the drone: flight model from the same geometry as the assembly view ---------- */
+function dronePos(D){ const g = D.geo;
+  if (g.style === 'shell') return [[88, 104], [-86, 98], [-86, -98], [88, -104]].map(([x, y]) => [x/1000, y/1000]);
+  return g.motors.map(m => [g.arm*Math.cos(m.a*Math.PI/180)/1000, g.arm*Math.sin(m.a*Math.PI/180)/1000]); }
+function buildCraft(D){
+  const g = D.geo, F = D.fly, k = .001, pal = PALS[D.pal] ? MT(PALS[D.pal].l) : MAT.red, parts = [];
+  const pos = dronePos(D), n = pos.length, carbon = MT('#4a4642'), batt = MT('#3f9fd8');
+  const put = (o, part) => parts.push({ o, part });
+  let zP = 0, h = 0, zCom = 0;
+  if (g.style === 'xplate'){
+    const L = g.plateL*k, Wd = g.plateW*k, T0 = (12 + g.standH)*k; zP = (10 + g.motorR*.22 + g.motorH + 1.2)*k; h = T0 + g.batt[2]*k;
+    put(boxO(-L/2, -Wd/2, .0025, L/2, Wd/2, .005, carbon), 'body');
+    pos.forEach(([x, y], i) => put(rotBoxO(x/2, y/2, Math.atan2(y, x), Math.hypot(x, y), g.armW*k, .005, .01, carbon), 'arm' + i));
+    put(boxO(-.02, -.018, .012, .018, .018, T0, MT('#3f8f5a')), 'body'); put(boxO(-L/2, -Wd/2, T0, L/2, Wd/2, T0 + .0025, carbon), 'body');
+    put(boxO(L/2 - .021, -.0095, .017, L/2 - .002, .0095, .036, MT('#2b2826')), 'body');
+    const [bl, bw, bh] = g.batt.map(v => v*k), x1 = g.action ? L/2 - .036 : bl/2;
+    put(boxO(x1 - bl, -bw/2, T0 + .0025, x1, bw/2, T0 + .0025 + bh, batt), 'batt');
+    if (g.action) put(boxO(L/2 - .032, -.035, T0 + .008, L/2 - .004, .035, T0 + .054, MT('#2b2826')), 'body');
+    zCom = T0*.6;
+  } else if (g.style === 'duct'){
+    const wh = !!g.whoop, z1 = (wh ? 8.5 : 5.5)*k, dR = g.ductR*k, dH = Math.max(g.ductH, (wh ? 8.5 : 5.5) + g.motorR*.22 + g.motorH + 5)*k;
+    zP = ((wh ? 8.5 : 5.5) + g.motorR*.22 + g.motorH + 1)*k; h = wh ? .02 : .06;
+    put(boxO(-(wh ? .015 : .032), -(wh ? .011 : .02), z1 - .002, wh ? .015 : .032, wh ? .011 : .02, z1, wh ? pal : carbon), 'body');
+    pos.forEach(([x, y], i) => { const segs = 10; for (let s = 0; s < segs; s++){ const a0 = s/segs*2*Math.PI, a1 = (s + 1)/segs*2*Math.PI, r0 = dR, r1 = dR + (wh ? .0012 : .0025);
+      put(solid(prismF([[x + r0*Math.cos(a0), y + r0*Math.sin(a0)], [x + r1*Math.cos(a0), y + r1*Math.sin(a0)], [x + r1*Math.cos(a1), y + r1*Math.sin(a1)], [x + r0*Math.cos(a1), y + r0*Math.sin(a1)]], 0, dH, true), pal), 'arm' + i); }
+      put(rotBoxO(x/2, y/2, Math.atan2(y, x), Math.hypot(x, y), g.armW*k, z1 - .002, z1, wh ? pal : carbon), 'arm' + i); });
+    put(boxO(-(wh ? .012 : .024), -(wh ? .009 : .017), z1, wh ? .014 : .022, wh ? .009 : .017, wh ? z1 + .01 : .031, wh ? MAT.white : pal), 'body');
+    const [bl, bw, bh] = g.batt.map(v => v*k);
+    put(wh ? boxO(-bl/2, -bw/2, z1 - .002 - bh, bl/2, bw/2, z1 - .002, batt) : boxO(-bl/2 - .004, -bw/2, .031, bl/2 - .004, bw/2, .031 + bh, batt), 'batt');
+    zCom = wh ? z1 : .02;
+  } else if (g.style === 'shell'){
+    put(solid(prismF([[-.072, -.031], [.062, -.031], [.078, -.018], [.078, .018], [.062, .031], [-.072, .031]], .01, .056, true), MAT.white, { mat2: (p, n) => n[2] > .5 ? pal : null }), 'body');
+    put(boxO(.08, -.012, .005, .102, .012, .025, MT('#2b2826')), 'body');
+    const mz = [.04, .026, .026, .04];
+    pos.forEach(([x, y], i) => { const front = x > 0, hx = front ? .054 : -.064, hz = front ? .03 : .016;
+      put(rotBoxO((x + hx)/2, (y + Math.sign(y)*.029)/2, Math.atan2(y - Math.sign(y)*.029, x - hx), Math.hypot(x - hx, y - Math.sign(y)*.029), .01, hz - .005, hz + .005, MAT.white), 'arm' + i);
+      put(cylO(x, y, front ? .026 : 0, mz[i], .0095, MAT.white, 8), 'arm' + i); if (front) put(cylO(x, y, 0, .026, .0025, MAT.white, 5), 'arm' + i); });
+    zP = .052; h = .06; zCom = .028;
+  } else {
+    const Rp = g.plateR*k, kk = g.plateR/165, Gh = g.gearH*k, zt = Gh + .0165*kk; zP = Gh + (31*kk + g.motorR*.87 + 3)*k; h = Gh + .2*kk;
+    put(cylO(0, 0, Gh, Gh + .031*kk, Rp, carbon, 12), 'body'); put(cylO(0, 0, Gh + .031*kk, Gh + .031*kk + .4*Rp*.6, .55*Rp, pal, 10), 'body');
+    pos.forEach(([x, y], i) => put(rotBoxO(x*.55, y*.55, Math.atan2(y, x), Math.hypot(x, y)*.9, .025*kk, zt - .0125*kk, zt + .0125*kk, carbon), 'arm' + i));
+    for (const sy of [-1, 1]){ put(boxO(-1.7*Rp, sy*1.4*Rp - .008, 0, 1.7*Rp, sy*1.4*Rp + .008, .016*kk, carbon), 'gear');
+      for (const sx of [-1, 1]) put(rotBoxO(sx*.8*Rp, sy*1.0*Rp, Math.atan2(.78*Rp*sy, .73*Rp*sx), .9*Rp, .014, .016, Gh, carbon), 'gear');
+      put(boxO(-.62*Rp, sy > 0 ? .05*Rp : -.62*Rp, Gh - .158*kk, .62*Rp, sy > 0 ? .62*Rp : -.05*Rp, Gh - .088*kk, batt), 'batt'); }
+    put(boxO(1.2*Rp - .07*kk, -.062*kk, Gh - .172*kk, 1.2*Rp + .07*kk, .062*kk, Gh - .07*kk, g.gimbal === 'cine' ? MAT.red : MAT.white), 'body');
+    zCom = Gh;
+  }
+  const mR = g.motorR*k;
+  pos.forEach(([x, y], i) => { const zb = g.style === 'shell' ? [.04, .026, .026, .04][i] : zP - (g.motorH || g.motorR*.65)*k - .002;
+    put(cylO(x, y, zb, zP - .001, mR, pal, 8), 'arm' + i); });
+  const zPs = pos.map((_, i) => g.style === 'shell' ? [.052, .038, .038, .052][i] : zP);
+  // move the origin to the centre of mass
+  for (const p of parts) for (const fc of p.o.faces) for (const q of fc.p) q[2] -= zCom;
+  for (const p of parts){ p.o.mn[2] -= zCom; p.o.mx[2] -= zCom; p.o.c[2] -= zCom; }
+  const armR = Math.max(...pos.map(([x, y]) => Math.hypot(x, y)));
+  const I = F.mass*armR*armR*.42;
+  return { D, parts, n, pos, dirs: g.motors.map(m => m.dir), props: pos.map(([x, y], i) => ({ x, y, z: zPs[i] - zCom + .002, r: g.propR*k, dir: g.motors[i].dir, col: g.propCol })),
+    foot: zCom, rad: armR + (g.style === 'duct' ? (g.ductR + 3)*k : g.propR*k*.8), I: [I, I, I*1.7], h };
+}
+
+/* ---------- settings ---------- */
+const SET = store.get('dl-flight', {});
+const setDefault = (k, v) => { if (SET[k] == null) SET[k] = v; };
+setDefault('env', 'field'); setDefault('wind', 0); setDefault('stickMode', 2); setDefault('sound', true); setDefault('view', 'chase'); setDefault('map', null); setDefault('rates', {});
+const saveSet = () => store.set('dl-flight', SET);
+
+/* ---------- state ---------- */
+let D = dlDrone(Q.get('d') || SET.drone || 'freestyle'); if (!D.ready) D = DL_DRONES[0];
+let CR, W, S;
+const modeNames = { acro:'Acro', angle:'Angle', gps:'GPS', sport:'Sport', cine:'Cine' };
+function rates(){ const r = SET.rates[D.id] || {}; return { c: r.c ?? D.fly.rate[0], m: r.m ?? D.fly.rate[1], e: r.e ?? D.fly.rate[2], y: r.y ?? D.fly.yawRate[1], up: r.up ?? D.fly.uptilt, fov: r.fov ?? (D.fly.cam === 'fpv' ? 120 : 84) }; }
+function newState(){
+  const sp = W.spawn, yaw = sp.yaw;
+  return { pos:[sp.p[0], sp.p[1], CR.foot + surfaceAt(sp.p[0], sp.p[1], .1)], vel:[0,0,0], R: rotZ(yaw), w:[0,0,0], T: Array(CR.n).fill(0), Tc: Array(CR.n).fill(0), iErr:[0,0,0],
+    armed:false, crashed:null, used:0, cellV:4.2, amps:0, t:0, flightT:0, ground:true, mode: S && D.fly.modes.includes(S.mode) ? S.mode : D.fly.modes[0], spin: Array(CR.n).fill(0),
+    debris:[], gate:0, lapT:null, lapStart:null, best: store.get('dl-best-' + W.id + '-' + D.id, null), lastLap:null, crashes: S ? S.crashes : 0, msg:'', msgT:0, paused:false, armSwitchSeen:false, landT:0 };
+}
+function load(){
+  CR = buildCraft(D); W = world(SET.env); S = newState(); SET.drone = D.id; saveSet();
+  document.getElementById('bBuild').href = 'drone-assembly.html?d=' + D.id;
+  syncUI(); }
+
+/* ---------- surfaces and collisions ---------- */
+function surfaceAt(x, y, zMax){ let h = 0;
+  for (const c of W.col) if (c.t === 'box' && x >= c.mn[0] && x <= c.mx[0] && y >= c.mn[1] && y <= c.mx[1] && c.mx[2] <= zMax + .02 && c.mx[2] > h) h = c.mx[2];
+  return h; }
+function closest(c, p){
+  if (c.t === 'box') return [clamp(p[0], c.mn[0], c.mx[0]), clamp(p[1], c.mn[1], c.mx[1]), clamp(p[2], c.mn[2], c.mx[2])];
+  if (c.t === 'cyl'){ const dx = p[0] - c.x, dy = p[1] - c.y, d = Math.hypot(dx, dy) || 1, r = Math.min(d, c.r); return [c.x + dx/d*r, c.y + dy/d*r, clamp(p[2], c.z0, c.z1)]; }
+  if (c.t === 'sph'){ const d = sb(p, c.c), l = len(d) || 1; return add(c.c, sc(d, Math.min(1, c.r/l))); }
+  const ca = Math.cos(c.a), sa = Math.sin(c.a), dx = p[0] - c.c[0], dy = p[1] - c.c[1], u = clamp(dx*ca + dy*sa, -c.hx, c.hx), v = clamp(-dx*sa + dy*ca, -c.hy, c.hy);
+  return [c.c[0] + u*ca - v*sa, c.c[1] + u*sa + v*ca, clamp(p[2], c.z0, c.z1)]; }
+const colName = c => c.t === 'sph' ? 'a tree' : c.t === 'cyl' ? (W.id === 'forest' || W.id === 'field' ? 'a trunk' : 'a pole') : c.t === 'obox' ? 'a gate' : W.id === 'city' ? 'a building' : W.id === 'room' ? 'the furniture' : 'an obstacle';
+
+/* ---------- input: keyboard, gamepad / radio, on-screen sticks ---------- */
+const keys = new Set();
+const stick = { L:[0, -1], R:[0, 0] };          // [x, y] in -1..1 (y up); L = throttle/yaw in Mode 2
+const kb = { L:[0, -1], R:[0, 0] };
+const pads = { L:null, R:null };              // active pointer per pad
+let gp = null, gpArmPrev = false, gpUsed = false;
+const defMap = id => /(edgetx|opentx|frsky|radiomaster|jumper|tbs|taranis|betaflight|radio|joystick|tx16|boxer|zorro|pocket)/i.test(id)
+  ? { roll:0, pitch:1, thr:2, yaw:3, inv:{}, arm:'a4' } : { roll:2, pitch:3, thr:1, yaw:0, inv:{ thr:true, pitch:true }, arm:'b0' };
+function readInput(dt){
+  const pads0 = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+  gp = pads0.find(p => p.axes.length >= 4) || null;
+  const springThr = S.mode === 'gps' || S.mode === 'sport' || S.mode === 'cine';
+  // keyboard: sticks ramp like a thumb would; throttle stays put in acro / angle
+  const tgt = (a, b) => (keys.has(a) ? 1 : 0) - (keys.has(b) ? 1 : 0), ramp = (v, t, r) => v + clamp(t - v, -r*dt, r*dt);
+  const ky = tgt('w', 's');
+  kb.L[1] = springThr ? ramp(kb.L[1], ky, ky ? 3 : 5) : clamp(kb.L[1] + ky*dt*.9, -1, 1);
+  kb.L[0] = ramp(kb.L[0], tgt('d', 'a'), tgt('d', 'a') ? 3.5 : 6);
+  kb.R[0] = ramp(kb.R[0], tgt('arrowright', 'arrowleft') || tgt('l', 'j'), 3.5);
+  kb.R[1] = ramp(kb.R[1], tgt('arrowup', 'arrowdown') || tgt('i', 'k'), 3.5);
+  let L = kb.L.slice(), R = kb.R.slice();
+  if (gp){ const m = SET.map || defMap(gp.id), ax = (k) => { const v = gp.axes[m[k]] || 0; return (m.inv && m.inv[k]) ? -v : v; };
+    if (['roll', 'pitch', 'yaw'].some(k => Math.abs(ax(k)) > .15)) gpUsed = true;
+    if (gpUsed){ L = [ax('yaw'), ax('thr')]; R = [ax('roll'), ax('pitch')]; }
+    const a = m.arm || 'b0', on = a[0] === 'a' ? (gp.axes[+a.slice(1)] || -1) > .3 : !!(gp.buttons[+a.slice(1)] && gp.buttons[+a.slice(1)].pressed);
+    if (a[0] === 'a'){ if (!on) S.armSwitchSeen = true; if (on && !S.armed && !S.crashed && S.armSwitchSeen){ tryArm(); if (!S.armed) S.armSwitchSeen = false; } if (!on && S.armed) disarm(); }
+    else { if (on && !gpArmPrev) S.armed ? disarm() : tryArm(); }
+    gpArmPrev = on;
+  } else gpUsed = false;
+  // on-screen pads: their last values persist (padMem); a key press hands control back to the keyboard
+  for (const side of ['L', 'R']) if (pads[side]) padMem[side] = pads[side].v.slice();
+  if (keys.size) padMem.used = false;
+  if (padMem.used && !gpUsed){ const a = padMem.L, b = padMem.R;
+    if (SET.stickMode == 1){ L = [a[0], b[1]]; R = [b[0], a[1]]; } else { L = a.slice(); R = b.slice(); } }
+  stick.L = L.map(v => clamp(v, -1, 1)); stick.R = R.map(v => clamp(v, -1, 1));
+}
+const padMem = { L:[0, -1], R:[0, 0], used:false };
+
+/* ---------- arming, reset, crash ---------- */
+function flash(msg, t = 2.2){ S.msg = msg; S.msgT = t; }
+function tryArm(){
+  if (S.crashed) return flash('Crashed: press R (or Reset) for a fresh drone');
+  const thrLow = S.mode === 'acro' || S.mode === 'angle' ? stick.L[1] < -.9 : true;
+  const tilt = Math.acos(clamp(S.R[8], -1, 1))*180/Math.PI;
+  if (!thrLow) return flash('Arming blocked: throttle not low. Pull the throttle stick all the way down.');
+  if (tilt > 25) return flash('Arming blocked: not level');
+  S.armed = true; S.iErr = [0,0,0]; audioOn(); flash(S.mode === 'acro' ? 'ARMED: props spinning. Acro mode: nothing levels it for you.' : 'ARMED', 1.6);
+}
+function disarm(){ S.armed = false; }
+function reset(){ const keep = S; S = newState(); S.crashes = keep.crashes; S.best = keep.best; padMem.L[1] = -1; kb.L[1] = -1; syncUI(); }
+function crash(why, impact){
+  if (S.crashed) return;
+  S.crashed = why; S.armed = false; S.crashes++; flash('', 0);
+  // the drone breaks into its parts, each flying off with the body's motion plus a kick
+  S.debris = CR.parts.reduce((acc, p) => { const g = acc.find(d => d.part === p.part); if (g) g.objs.push(p.o); else acc.push({ part: p.part, objs:[p.o] }); return acc; }, [])
+    .map(d => ({ objs: d.objs, pos: S.pos.slice(), R: S.R.slice(), vel: add(sc(S.vel, .45), [(rnd() - .5)*impact*.6, (rnd() - .5)*impact*.6, rnd()*impact*.5]), w: [(rnd() - .5)*20, (rnd() - .5)*20, (rnd() - .5)*20], rest:false }));
+}
+
+/* ---------- physics + flight controller ---------- */
+const actual = (x, c, m, e) => { const ax = Math.abs(x), expof = ax*(Math.pow(x, 5)*e + x*(1 - e)); return (x*c + Math.max(0, m - c)*expof)*Math.PI/180; };
+const dz = (v, d = .02) => Math.abs(v) < d ? 0 : (v - Math.sign(v)*d)/(1 - d);
+let windT = 0;
+function step(dt){
+  const F = D.fly, m = F.mass, n = CR.n, Tmax = F.twr*m*G/n, rt = rates();
+  S.t += dt; windT += dt;
+  if (S.crashed){ stepDebris(dt); return; }
+  const R = S.R, bz = [R[2], R[5], R[8]], hd = Math.atan2(R[3], R[0]), hf = [Math.cos(hd), Math.sin(hd), 0], hl = [-Math.sin(hd), Math.cos(hd), 0];
+  // battery: open-circuit voltage falls with charge, sags with current (internal resistance)
+  const soc = clamp(1 - S.used/F.mAh, 0, 1), ocv = 3.45 + .75*soc - (soc < .12 ? (.12 - soc)*4 : 0), Rc = 5.2/F.mAh;
+  S.cellV = Math.max(2.8, ocv - S.amps*Rc); const vf = clamp(Math.pow(S.cellV/4.1, 2), .2, 1.05), Tl = Tmax*vf;
+  // --- the flight controller ---
+  const mode = S.mode, gpsM = mode === 'gps' || mode === 'sport' || mode === 'cine';
+  const yawRate = -actual(dz(stick.L[0]), Math.min(rt.y*.3, 200), rt.y, .3) * (mode === 'cine' ? .4 : 1);
+  let wd = [0, 0, yawRate], Tc = 0;
+  if (mode === 'acro'){ wd[0] = actual(dz(stick.R[0]), rt.c, rt.m, rt.e); wd[1] = actual(dz(stick.R[1]), rt.c, rt.m, rt.e); }
+  let zd = null;
+  if (mode === 'angle'){ const lim = 55*Math.PI/180, th = dz(stick.R[1])*lim, ph = dz(stick.R[0])*lim; zd = nz(add([0, 0, 1], add(sc(hf, Math.tan(th)), sc(hl, -Math.tan(ph))))); }
+  if (gpsM){ const vmax = mode === 'sport' ? 16 : mode === 'cine' ? 3 : 10, tmax = (mode === 'sport' ? 35 : mode === 'cine' ? 15 : 25)*Math.PI/180;
+    const vdes = add(sc(hf, dz(stick.R[1], .06)*vmax), sc(hl, -dz(stick.R[0], .06)*vmax)), w0 = wind();
+    let a = [(vdes[0] - S.vel[0])*1.6, (vdes[1] - S.vel[1])*1.6]; const am = Math.hypot(a[0], a[1]), amax = G*Math.tan(tmax); if (am > amax) a = [a[0]*amax/am, a[1]*amax/am];
+    // feed-forward the wind and drag the drone must lean into to hold its speed
+    const vrel = sb(S.vel, w0), sp = len(vrel), fd = [F.kd*sp*vrel[0]/m, F.kd*sp*vrel[1]/m]; a = [a[0] + fd[0], a[1] + fd[1]];
+    zd = nz([a[0]/G, a[1]/G, 1]);
+    const climb = dz(stick.L[1], .1)*(mode === 'sport' ? 5 : mode === 'cine' ? 1.5 : 3), az = clamp((climb - S.vel[2])*3, -G*.8, G*1.5);
+    Tc = m*(G + az)/Math.max(.5, bz[2]);
+    if (S.ground && climb <= 0){ Tc = 0; S.landT += dt; if (S.landT > 1 && stick.L[1] < -.6 && S.armed){ disarm(); flash('Landed and disarmed', 1.4); } } else S.landT = 0;
+  }
+  if (zd){ const e = mtv(R, cr(bz, zd)), ka = D.fly.tau > .1 ? 3.2 : 7; wd[0] = clamp(e[0]*ka, -rt.m*Math.PI/180, rt.m*Math.PI/180); wd[1] = clamp(e[1]*ka, -rt.m*Math.PI/180, rt.m*Math.PI/180); }
+  if (!gpsM){ const thr = (stick.L[1] + 1)/2; Tc = n*Tl*(.035 + .965*Math.pow(thr, 1.6)); }
+  // rate loop: torque = inertia x (P x rate error + I x accumulated error); the motors' own lag limits how fast it can be
+  const kp = Math.min(60, .42/F.tau), ki = kp*.6;
+  const ew = sb(wd, S.w); if (S.armed && !S.ground) S.iErr = S.iErr.map((v, i) => clamp(v + ew[i]*dt, -.5, .5)); else S.iErr = [0,0,0];
+  const tq = [0, 1, 2].map(i => CR.I[i]*(kp*ew[i] + ki*S.iErr[i]));
+  // mixer: each motor gets throttle share + roll + pitch + yaw shares
+  const sy2 = CR.pos.reduce((a, p) => a + p[1]*p[1], 0), sx2 = CR.pos.reduce((a, p) => a + p[0]*p[0], 0);
+  let cmd = CR.pos.map(([x, y], i) => Tc/n + tq[0]*y/sy2 - tq[1]*x/sx2 + tq[2]*CR.dirs[i]/(F.kQ*n));
+  // airmode-style clipping: shift the whole set to fit, keeping the differences (attitude) when possible
+  const hi = Math.max(...cmd), lo = Math.min(...cmd);
+  if (hi > Tl) cmd = cmd.map(v => v - (hi - Tl)); if (Math.min(...cmd) < 0 && hi - lo < Tl) cmd = cmd.map(v => v - Math.min(0, lo));
+  const idle = .035*Tl*(gpsM ? 1 : 0);
+  cmd = cmd.map(v => S.armed ? clamp(v, gpsM ? (S.ground && Tc === 0 ? idle : 0) : .035*Tl*.3, Tl) : 0);
+  if (soc <= 0) { cmd = cmd.map(() => 0); if (S.armed){ flash('Battery empty: the ESCs shut down', 3); } }
+  S.Tc = cmd;
+  const a = Math.min(1, dt/F.tau); S.T = S.T.map((t, i) => t + (cmd[i] - t)*a);
+  // --- forces and torques ---
+  const Tsum = S.T.reduce((x, y) => x + y, 0), w0 = wind(), vrel = sb(S.vel, w0), sp = len(vrel);
+  const Fw = add(sc(bz, Tsum), add([0, 0, -m*G], add(sc(vrel, -F.kd*sp), sc(vrel, -m*.08))));
+  let tau = [0, 0, 0]; CR.pos.forEach(([x, y], i) => { tau[0] += y*S.T[i]; tau[1] -= x*S.T[i]; tau[2] += CR.dirs[i]*F.kQ*S.T[i]; });
+  tau = sb(tau, sc(S.w, CR.I[0]*.4));                       // rotor and air damping
+  const Iw = S.w.map((v, i) => v*CR.I[i]), gyro = cr(S.w, Iw);
+  const alpha = [0, 1, 2].map(i => (tau[i] - gyro[i])/CR.I[i]);
+  S.vel = add(S.vel, sc(Fw, dt/m)); S.w = add(S.w, sc(alpha, dt));
+  const prev = S.pos.slice(); S.pos = add(S.pos, sc(S.vel, dt)); S.R = orthon(mm(S.R, expW(S.w, dt)));
+  S.amps = .4 + F.Imax*Math.pow(Tsum/(n*Tmax), 1.3); if (S.armed) { S.used += S.amps*dt/3.6; S.flightT += dt; }
+  S.spin = S.spin.map((v, i) => v + Math.sqrt(Math.max(0, S.T[i])/Tmax)*dt*60);
+  collide(dt, prev);
+  gates(prev);
+}
+function wind(){ if (!SET.wind) return [0, 0, 0]; const t = windT, base = SET.wind == 1 ? 2.5 : 4.5, g = SET.wind == 2 ? 1 + .9*Math.sin(t*.7)*Math.sin(t*1.9 + 1) : 1 + .15*Math.sin(t*.5);
+  return [base*g*.8, base*g*.6, SET.wind == 2 ? .6*Math.sin(t*2.3) : 0]; }
+function collide(dt, prev){
+  const F = D.fly, p = S.pos, sh = surfaceAt(p[0], p[1], p[2] - CR.foot + .05);
+  S.ground = false;
+  if (p[2] - CR.foot <= sh){
+    const vn = -S.vel[2], tilt = Math.acos(clamp(S.R[8], -1, 1))*180/Math.PI, hs = Math.hypot(S.vel[0], S.vel[1]);
+    if (vn > F.crashV) return crash(`Hit the ${sh > 0 ? 'top of ' + (W.id === 'room' ? 'the furniture' : 'a building') : 'ground'} at ${vn.toFixed(1)} m/s (this drone survives about ${F.crashV} m/s)`, vn);
+    if (tilt > 65 && (S.armed || hs > 2)) return crash(tilt > 120 ? 'Landed upside down' : 'Tipped over: a prop hit the ground', Math.max(2, hs + vn));
+    if (hs > F.crashV*.8 && tilt > 25) return crash(`Cartwheeled at ${hs.toFixed(1)} m/s`, hs);
+    p[2] = sh + CR.foot; if (S.vel[2] < 0) S.vel[2] = 0;
+    const Tsum = S.T.reduce((x, y) => x + y, 0);
+    if (Tsum < F.mass*G*.98){ S.ground = true; S.vel[0] *= Math.max(0, 1 - 9*dt); S.vel[1] *= Math.max(0, 1 - 9*dt);
+      // resting on its feet: settle level
+      const bz = [S.R[2], S.R[5], S.R[8]], e = mtv(S.R, cr(bz, [0, 0, 1])); S.w = [e[0]*8, e[1]*8, S.w[2]*.8]; }
+  }
+  for (const c of W.col){
+    if (c.t === 'box' && p[2] - CR.foot >= c.mx[2] - .03) continue;          // standing on it: handled as a surface
+    const q = closest(c, p), d = sb(p, q), dist = len(d);
+    if (dist >= CR.rad) continue;
+    // inside the collider already (fast or thin): push back out the side it came in through
+    const qp = closest(c, prev), dp2 = sb(prev, qp), nrm = dist > 1e-6 ? sc(d, 1/dist) : len(dp2) > 1e-6 ? nz(dp2) : [0, 0, 1], vn = -dt3(S.vel, nrm);
+    if (vn > F.crashV*(F.ducts ? 1 : .75)) return crash(`Hit ${colName(c)} at ${vn.toFixed(1)} m/s`, vn);
+    S.pos = dist > 1e-6 ? add(p, sc(nrm, CR.rad - dist)) : add(qp, sc(nrm, CR.rad)); if (vn > 0){ S.vel = add(S.vel, sc(nrm, vn*1.35)); S.vel = sc(S.vel, .8);
+      S.w = add(S.w, [(rnd() - .5)*vn*(F.ducts ? 4 : 10), (rnd() - .5)*vn*(F.ducts ? 4 : 10), (rnd() - .5)*vn*3]); }
+  }
+  const lim = W.id === 'room' ? 4 : 400; if (Math.abs(p[0]) > lim || Math.abs(p[1]) > lim || p[2] > 400) { crash('Flew out of range: the radio link failsafed', 2); }
+}
+function gates(prev){
+  if (!W.gates.length) return;
+  const g = W.gates[S.gate], n = [Math.cos(g.a), Math.sin(g.a), 0], s0 = dt3(sb(prev, g.c), n), s1 = dt3(sb(S.pos, g.c), n);
+  if (s0 < 0 && s1 >= 0){ const t = s0/(s0 - s1), hit = add(prev, sc(sb(S.pos, prev), t)), d = sb(hit, g.c), u = -d[0]*n[1] + d[1]*n[0];
+    if (Math.abs(u) < g.w/2 && Math.abs(d[2]) < g.h/2){
+      if (S.gate === 0){ if (S.lapStart != null){ const lap = S.t - S.lapStart; S.lastLap = lap; if (S.best == null || lap < S.best){ S.best = lap; store.set('dl-best-' + W.id + '-' + D.id, lap); flash('New best lap: ' + lap.toFixed(2) + ' s', 2); } else flash('Lap: ' + lap.toFixed(2) + ' s', 1.5); } S.lapStart = S.t; }
+      S.gate = (S.gate + 1) % W.gates.length; } }
+}
+function stepDebris(dt){
+  for (const d of S.debris){ if (d.rest) continue;
+    d.vel[2] -= G*dt; d.vel = sc(d.vel, 1 - .3*dt); d.pos = add(d.pos, sc(d.vel, dt)); d.R = orthon(mm(d.R, expW(d.w, dt)));
+    const zmin = Math.min(...d.objs.map(o => o.mn[2])), floor = surfaceAt(d.pos[0], d.pos[1], d.pos[2]) + Math.max(.005, -zmin*.5);
+    if (d.pos[2] < floor){ d.pos[2] = floor; d.vel = [d.vel[0]*.5, d.vel[1]*.5, Math.abs(d.vel[2])*.3]; d.w = sc(d.w, .5); if (len(d.vel) < .3){ d.rest = true; } } }
+}
+
+/* ---------- rendering ---------- */
+const cv = document.getElementById('cv'), cx = cv.getContext('2d');
+let VW = 0, VH = 0, DPR = 1;
+function resize(){ DPR = Math.min(1.75, devicePixelRatio || 1); VW = innerWidth; VH = innerHeight; cv.width = VW*DPR; cv.height = VH*DPR; }
+addEventListener('resize', resize); resize();
+const cam = { pos:[0,0,0], f:[1,0,0], r:[0,-1,0], u:[0,0,1], F:500, near:.03, chase:null };
+function setCam(pos, f, upHint, hfov){ cam.pos = pos; cam.f = nz(f); cam.r = nz(cr(cam.f, upHint)); cam.u = cr(cam.r, cam.f); cam.F = (VW/2)/Math.tan(hfov*Math.PI/360); }
+function updateCam(dt){
+  const v = SET.view, R = S.crashed ? (S.debris[0] ? S.debris[0].R : S.R) : S.R, p = S.crashed && S.debris[0] ? S.debris[0].pos : S.pos, rt = rates(), sz = Math.max(.25, CR.rad*2);
+  cam.near = Math.max(.01, sz*.05);
+  if (v === 'fpv' && !S.crashed){
+    const up = rt.up*Math.PI/180;
+    if (D.fly.cam === 'gimbal'){ const hd = Math.atan2(R[3], R[0]), f = [Math.cos(hd)*Math.cos(up), Math.sin(hd)*Math.cos(up), Math.sin(up)]; setCam(p, f, [0, 0, 1], rt.fov); }
+    else { const fb = mv(R, [Math.cos(up), 0, Math.sin(up)]), ub = mv(R, [-Math.sin(up), 0, Math.cos(up)]); setCam(add(p, mv(R, [CR.rad*.3, 0, .01])), fb, ub, rt.fov); }
+  } else if (v === 'los'){ setCam(W.pilot, sb(p, W.pilot), [0, 0, 1], 52); }
+  else {
+    const hd = Math.atan2(R[3], R[0]), back = [-Math.cos(hd), -Math.sin(hd), 0], want = add(p, add(sc(back, sz*3.5 + .5), [0, 0, sz*1.2 + .25]));
+    if (!cam.chase) cam.chase = want; cam.chase = add(cam.chase, sc(sb(want, cam.chase), Math.min(1, dt*5))); cam.chase[2] += (want[2] - cam.chase[2])*Math.min(1, dt*12);
+    if (W.id === 'room') cam.chase = [clamp(cam.chase[0], -3.1, 3.1), clamp(cam.chase[1], -2.5, 2.5), clamp(cam.chase[2], .1, 2.5)];
+    const floor = surfaceAt(cam.chase[0], cam.chase[1], cam.chase[2]) + .15; if (cam.chase[2] < floor) cam.chase[2] = floor;
+    setCam(cam.chase, sb(add(p, [0, 0, sz*.25]), cam.chase), [0, 0, 1], 78);
+  }
+}
+const toC = p => { const d = sb(p, cam.pos); return [dt3(d, cam.r), dt3(d, cam.u), dt3(d, cam.f)]; };
+function clipN(poly){ const out = [], nr = cam.near;
+  for (let i = 0; i < poly.length; i++){ const a = poly[i], b = poly[(i+1) % poly.length], ia = a[2] >= nr, ib = b[2] >= nr;
+    if (ia) out.push(a); if (ia !== ib){ const t = (nr - a[2])/(b[2] - a[2]); out.push([a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t, nr]); } }
+  return out; }
+const scr = q => [(VW/2 + q[0]/q[2]*cam.F)*DPR, (VH/2 - q[1]/q[2]*cam.F)*DPR];
+function subPath(ptsW){ const c = clipN(ptsW.map(toC)); if (c.length < 3) return false;
+  c.forEach((q, i) => { const s = scr(q); i ? cx.lineTo(s[0], s[1]) : cx.moveTo(s[0], s[1]); }); cx.closePath(); return true; }
+function poly(ptsW, fillC, ink = 0, alpha = 1){
+  cx.beginPath(); if (!subPath(ptsW)) return false;
+  if (alpha < 1) cx.globalAlpha = alpha; cx.fillStyle = fillC; cx.fill(); if (alpha < 1) cx.globalAlpha = 1;
+  if (ink){ cx.lineWidth = ink*DPR; cx.stroke(); } return true; }
+function fogged(m, n, dist){   // flat tone, faded toward the haze in 8 steps with distance
+  const lvl = Math.min(7, Math.floor(dist/W.far*8)), base = toneOf(n, m);
+  return lvl ? mix(base, W.haze, lvl/8*.9) : base; }
+function drawObj(o, xf, opt = {}){
+  const faces = [];
+  for (const fc of o.faces){
+    const p = xf ? fc.p.map(xf.p) : fc.p, n = xf ? xf.n(fc.n) : fc.n;
+    if (dt3(n, sb(cam.pos, p[0])) <= 0) continue;
+    let d = 0; for (const q of p) d += len(sb(q, cam.pos)); d /= p.length;
+    faces.push({ p, n, d, m: fc.mat });
+  }
+  faces.sort((a, b) => b.d - a.d);
+  for (const fc of faces){ const m = opt.hl ? opt.hl : fc.m; poly(fc.p, fogged(m, fc.n, fc.d), fc.d < W.far*.6 ? clamp(2.2 - fc.d/25, .5, 1.8)*(opt.inkK || 1) : 0); }
+}
+const boxDist = o => { const q = [0,1,2].map(i => clamp(cam.pos[i], o.mn[i], o.mx[i])); return len(sb(q, cam.pos)); };
+function render(dt){
+  updateCam(dt);
+  const w = cv.width, h = cv.height;
+  cx.setTransform(1, 0, 0, 1, 0, 0); cx.lineJoin = 'round'; cx.lineCap = 'round'; cx.strokeStyle = INK;
+  cx.fillStyle = W.sky; cx.fillRect(0, 0, w, h);
+  // ground: one huge quad around the camera; the horizon falls where it meets the sky
+  const G0 = 5000, gp0 = cam.pos;
+  poly([[gp0[0] - G0, gp0[1] - G0, 0], [gp0[0] + G0, gp0[1] - G0, 0], [gp0[0] + G0, gp0[1] + G0, 0], [gp0[0] - G0, gp0[1] + G0, 0]], W.ground);
+  // haze band along the horizon
+  const hz = d => { const q = [dt3(d, cam.r), dt3(d, cam.u), dt3(d, cam.f)]; return q[2] > 1e-4 ? scr(q) : null; };
+  const fh = nz([cam.f[0], cam.f[1], 0]), rh = nz([cam.r[0], cam.r[1], 0]);
+  if (len([cam.f[0], cam.f[1], 0]) > .05){ const A = hz(add(fh, sc(rh, -3))), B = hz(add(fh, sc(rh, 3)));
+    if (A && B){ const ang = Math.atan2(B[1] - A[1], B[0] - A[0]); cx.save(); cx.translate(A[0], A[1]); cx.rotate(ang);
+      const gr = cx.createLinearGradient(0, -40*DPR, 0, 40*DPR); gr.addColorStop(0, W.sky + '00'); gr.addColorStop(.5, W.haze); gr.addColorStop(1, W.haze + '00');
+      cx.fillStyle = gr; cx.fillRect(-4*w, -40*DPR, 8*w + Math.hypot(B[0] - A[0], B[1] - A[1]), 80*DPR); cx.restore(); } }
+  // ground decals and grass tufts (they give the eye speed and height)
+  // un-inked decals of one colour go in one path (road markings, stripes): far fewer canvas calls
+  let batchCol = null; const flush = () => { if (batchCol){ cx.fillStyle = batchCol; cx.fill(); batchCol = null; } };
+  for (const dc of W.decals){ if (!dc.c){ dc.c = dc.p.reduce((a, q) => add(a, sc(q, 1/dc.p.length)), [0,0,0]); dc.r = Math.max(...dc.p.map(q => len(sb(q, dc.c)))); }
+    if (len(sb(dc.c, cam.pos)) - dc.r > W.far) continue;
+    if (dc.ink){ flush(); poly(dc.p, dc.col, 1); continue; }
+    if (batchCol !== dc.col){ flush(); batchCol = dc.col; cx.beginPath(); }
+    subPath(dc.p); }
+  flush();
+  cx.beginPath(); const tr = W.id === 'room' ? 0 : 45;
+  for (const [x, y] of W.tufts){ const dx = x - cam.pos[0], dy = y - cam.pos[1]; if (dx*dx + dy*dy > tr*tr) continue;
+    for (const o of [-.07, .07]){ const a = toC([x, y, 0]), b = toC([x + o, y + o*.4, .14]); if (a[2] < cam.near || b[2] < cam.near) continue; const sa = scr(a), sb2 = scr(b); cx.moveTo(sa[0], sa[1]); cx.lineTo(sb2[0], sb2[1]); } }
+  cx.strokeStyle = '#5f8f55'; cx.lineWidth = 1.1*DPR; cx.stroke(); cx.strokeStyle = INK;
+  // objects: background (walls, hills) first, then far to near
+  const list = [];
+  for (const o of W.objs){
+    const dv = sb(o.c, cam.pos), dist = len(dv);
+    if (!o.bg && dist - o.r > W.far) continue;
+    if (dt3(dv, cam.f) < -o.r) continue;
+    list.push({ o, d: o.bg ? 1e9 - dist : boxDist(o) + dist*1e-3 });
+  }
+  // the drone's shadow on whatever is under it
+  const dp = S.crashed ? null : S.pos;
+  if (dp){ const sh = surfaceAt(dp[0], dp[1], dp[2]), r = CR.rad*.8, k = clamp(1 - (dp[2] - sh)/25, .15, 1);
+    const sp = circP(dp[0], dp[1], r, 14).map(([x, y]) => [x, y, sh + .004]);
+    list.push({ shadow: sp, alpha: .38*k, d: len(sb(dp, cam.pos)) + .01 }); }
+  // the drone (not in FPV, where you are the camera)
+  if (!S.crashed && SET.view !== 'fpv') list.push({ craft:true, d: len(sb(S.pos, cam.pos)) - CR.rad*.3 });
+  if (S.crashed) for (const d of S.debris) list.push({ debris: d, d: len(sb(d.pos, cam.pos)) });
+  list.sort((a, b) => b.d - a.d);
+  const nextGate = W.gates[S.gate];
+  for (const it of list){
+    if (it.shadow){ poly(it.shadow, SHADOW, 0, it.alpha); continue; }
+    if (it.craft){ drawCraft(); continue; }
+    if (it.debris){ const d = it.debris; for (const o of d.objs) drawObj(o, { p: q => add(d.pos, mv(d.R, q)), n: v => mv(d.R, v) }); continue; }
+    drawObj(it.o, null, { hl: it.o.gate && it.o.gate === nextGate ? MAT.yellow : null });
+  }
+  drawHUD();
+}
+function drawCraft(){
+  const R = S.R, P0 = S.pos, xf = { p: q => add(P0, mv(R, q)), n: v => mv(R, v) };
+  const items = CR.parts.map(p => ({ p, d: len(sb(xf.p(p.o.c), cam.pos)) }));
+  CR.props.forEach((pr, i) => items.push({ prop: pr, i, d: len(sb(xf.p([pr.x, pr.y, pr.z]), cam.pos)) - .001 }));
+  items.sort((a, b) => b.d - a.d);
+  const Tmax = D.fly.twr*D.fly.mass*G/CR.n;
+  for (const it of items){
+    if (it.p){ drawObj(it.p.o, xf, { inkK: .8 }); continue; }
+    const pr = it.prop, sp = Math.sqrt(Math.max(0, S.T[it.i])/Tmax);
+    const disc = circP(pr.x, pr.y, pr.r, 16).map(([x, y]) => xf.p([x, y, pr.z]));
+    poly(disc, pr.col, 0, S.armed || sp > .02 ? .22 + .2*sp : 0);
+    // the blades: blurred when spinning, a bar when still
+    const a = S.spin[it.i]*-pr.dir, nb = D.geo.blades;
+    for (let b = 0; b < nb; b++){ const t = a + b*2*Math.PI/nb, c = Math.cos(t), s = Math.sin(t), wb = pr.r*.09;
+      const bl = [[pr.x + c*pr.r*.1 - s*wb, pr.y + s*pr.r*.1 + c*wb], [pr.x + c*pr.r - s*wb*.5, pr.y + s*pr.r + c*wb*.5], [pr.x + c*pr.r + s*wb*.5, pr.y + s*pr.r - c*wb*.5], [pr.x + c*pr.r*.1 + s*wb, pr.y + s*pr.r*.1 - c*wb]].map(([x, y]) => xf.p([x, y, pr.z + .001]));
+      poly(bl, pr.col, .8, S.armed ? .45 : 1); }
+  }
+}
+
+/* ---------- HUD: OSD numbers, attitude, the live mixer and the sticks ---------- */
+function txt(s, x, y, size = 13, col = INK, align = 'left', bold = 700){ cx.font = `${bold} ${size*DPR}px ui-monospace,Menlo,monospace`; cx.textAlign = align; cx.fillStyle = col; cx.fillText(s, x*DPR, y*DPR); }
+function osd(s, x, y, size = 14, align = 'left', col = '#ffffff'){ cx.font = `800 ${size*DPR}px ui-monospace,Menlo,monospace`; cx.textAlign = align; cx.lineWidth = 3*DPR; cx.strokeStyle = '#000000'; cx.strokeText(s, x*DPR, y*DPR); cx.fillStyle = col; cx.fillText(s, x*DPR, y*DPR); cx.strokeStyle = INK; }
+function panel(x, y, w, h){ cx.beginPath(); cx.roundRect((x + 3)*DPR, (y + 3)*DPR, w*DPR, h*DPR, 10*DPR); cx.fillStyle = INK; cx.fill();
+  cx.beginPath(); cx.roundRect(x*DPR, y*DPR, w*DPR, h*DPR, 10*DPR); cx.fillStyle = '#fbf7ea'; cx.fill(); cx.lineWidth = 1.6*DPR; cx.strokeStyle = INK; cx.stroke(); }
+function padRect(side){ const s = Math.min(150, VW*.28, VH*.24), m = 14, y = VH - s - m; return side === 'L' ? [m, y, s] : [VW - s - m, y, s]; }
+let barBottom = 54;
+function drawHUD(){
+  const F = D.fly, alt = S.pos[2] - CR.foot, spd = Math.hypot(...S.vel)*3.6, pct = clamp(1 - S.used/F.mAh, 0, 1)*100;
+  const fpv = SET.view === 'fpv', top = Math.max(54, barBottom + 10);
+  const R = S.R, pitch = Math.asin(clamp(R[6], -1, 1)), roll = Math.atan2(R[7], R[8]);
+  if (fpv && !S.crashed){
+    // a Betaflight-style OSD: crosshair, artificial horizon, numbers
+    const cxm = VW/2, cym = VH/2, k = cam.F, hl = Math.min(140, VW*.18);
+    cx.save(); cx.translate(cxm*DPR, cym*DPR); cx.rotate(roll);
+    const off = Math.tan(pitch)*k*.3;
+    cx.strokeStyle = '#ffffff'; cx.lineWidth = 2*DPR; cx.shadowColor = '#000'; cx.shadowBlur = 2*DPR;
+    cx.beginPath(); cx.moveTo(-hl*DPR, off*DPR); cx.lineTo(-hl*.3*DPR, off*DPR); cx.moveTo(hl*.3*DPR, off*DPR); cx.lineTo(hl*DPR, off*DPR); cx.stroke(); cx.restore();
+    cx.shadowBlur = 0; cx.strokeStyle = '#ffffff'; cx.lineWidth = 2*DPR; cx.beginPath(); cx.moveTo((cxm - 10)*DPR, cym*DPR); cx.lineTo((cxm + 10)*DPR, cym*DPR); cx.moveTo(cxm*DPR, (cym - 6)*DPR); cx.lineTo(cxm*DPR, (cym + 6)*DPR); cx.stroke(); cx.strokeStyle = INK;
+    osd(`${(S.cellV*F.cells).toFixed(1)}V  ${(S.cellV).toFixed(2)}/cell`, 16, top + 10, 14, 'left', S.cellV < 3.5 ? '#ff6a5a' : '#ffffff');
+    osd(`${Math.round(pct)}%  ${S.amps.toFixed(0)}A`, 16, top + 30);
+    osd(`${fmtT(S.flightT)}`, VW - 16, top + 10, 14, 'right');
+    osd(`ALT ${alt.toFixed(1)}m  ${spd.toFixed(0)}km/h`, VW - 16, top + 30, 14, 'right');
+    osd(S.armed ? modeNames[S.mode].toUpperCase() : 'DISARMED', VW/2, top + 10, 14, 'center', S.armed ? '#ffffff' : '#ffd23f');
+  } else {
+    panel(10, top, 186, 98);
+    txt(S.armed ? 'ARMED' : 'DISARMED', 22, top + 20, 12, S.armed ? '#c4362b' : INK, 'left', 800); txt(modeNames[S.mode].toUpperCase() + ' MODE', 184, top + 20, 11, INK, 'right', 700);
+    cx.lineWidth = 1.4*DPR; cx.strokeStyle = INK; cx.strokeRect(22*DPR, (top + 30)*DPR, 120*DPR, 12*DPR);
+    cx.fillStyle = pct < 25 ? '#e2483d' : '#43c25c'; cx.fillRect(23.5*DPR, (top + 31.5)*DPR, 117*pct/100*DPR, 9*DPR);
+    txt(Math.round(pct) + '%', 184, top + 41, 12, INK, 'right');
+    txt(`${(S.cellV*F.cells).toFixed(1)} V  ${S.cellV.toFixed(2)} V/cell`, 22, top + 60, 12, S.cellV < 3.5 ? '#c4362b' : INK);
+    txt(`ALT ${alt.toFixed(1)} m   ${spd.toFixed(0)} km/h`, 22, top + 77, 12);
+    txt(`TIME ${fmtT(S.flightT)}   ${S.amps.toFixed(0)} A`, 22, top + 93, 12);
+    // attitude ball
+    const ax = 240, ay = top + 50, ar = 40;
+    cx.save(); cx.beginPath(); cx.arc(ax*DPR, ay*DPR, ar*DPR, 0, 2*Math.PI); cx.fillStyle = '#9fc9e8'; cx.fill(); cx.clip();
+    cx.translate(ax*DPR, ay*DPR); cx.rotate(-roll); cx.fillStyle = '#c99a5b'; cx.fillRect(-ar*2*DPR, (pitch/(Math.PI/2))*ar*DPR, ar*4*DPR, ar*4*DPR);
+    cx.strokeStyle = '#fff'; cx.lineWidth = 1.5*DPR; cx.beginPath(); cx.moveTo(-ar*DPR, (pitch/(Math.PI/2))*ar*DPR); cx.lineTo(ar*DPR, (pitch/(Math.PI/2))*ar*DPR); cx.stroke(); cx.restore();
+    cx.beginPath(); cx.arc(ax*DPR, ay*DPR, ar*DPR, 0, 2*Math.PI); cx.lineWidth = 1.8*DPR; cx.strokeStyle = INK; cx.stroke();
+    cx.beginPath(); cx.moveTo((ax - 22)*DPR, ay*DPR); cx.lineTo((ax - 7)*DPR, ay*DPR); cx.lineTo(ax*DPR, (ay + 6)*DPR); cx.lineTo((ax + 7)*DPR, ay*DPR); cx.lineTo((ax + 22)*DPR, ay*DPR); cx.lineWidth = 2.4*DPR; cx.strokeStyle = '#f4b829'; cx.stroke(); cx.strokeStyle = INK;
+  }
+  // race info
+  if (W.gates.length){ const y = fpv ? top + 52 : top + 20, x = VW - 16;
+    const lap = S.lapStart != null ? S.t - S.lapStart : 0;
+    const line = `GATE ${S.gate + 1}/${W.gates.length}   LAP ${lap ? lap.toFixed(1) : '-'}s   BEST ${S.best ? S.best.toFixed(2) + 's' : '-'}`;
+    if (fpv) osd(line, x, y, 13, 'right'); else { panel(VW - 330, top, 320, 26); txt(line, VW - 20, top + 18, 12, INK, 'right'); }
+    // marker over the next gate, or an arrow at the edge pointing to it
+    const g = W.gates[S.gate], q = toC(add(g.c, [0, 0, g.h/2 + .5]));
+    if (q[2] > cam.near){ const s = scr(q); if (s[0] > 0 && s[0] < cv.width && s[1] > 0 && s[1] < cv.height){ cx.beginPath(); cx.moveTo(s[0], s[1]); cx.lineTo(s[0] - 9*DPR, s[1] - 14*DPR); cx.lineTo(s[0] + 9*DPR, s[1] - 14*DPR); cx.closePath(); cx.fillStyle = '#f4b829'; cx.fill(); cx.lineWidth = 1.6*DPR; cx.stroke(); } }
+    else txt('NEXT GATE IS BEHIND YOU (yellow)', VW/2, VH*.72, 12, INK, 'center');
+  }
+  // the live mixer: each motor's output, placed like the real motors, ring colour = spin direction
+  const Tmax = F.twr*F.mass*G/CR.n, mw = Math.min(190, VW - 2*padRect('L')[2] - 52), mh = mw*.72, mx0 = VW/2 - mw/2, my0 = VH - mh - 16;
+  if (mw > 90){ panel(mx0, my0, mw, mh);
+  txt('MOTOR MIX', mx0 + 10, my0 + 16, 10.5, '#857d6e', 'left', 800);
+  const ext = Math.max(...CR.pos.map(([x, y]) => Math.max(Math.abs(x), Math.abs(y)))), mr = Math.min(15, mh*.12), sk = (mh/2 - mr - 14)/ext, ccx = mx0 + mw/2, ccy = my0 + mh/2 + 9;
+  cx.beginPath(); CR.pos.forEach(([x, y]) => { cx.moveTo(ccx*DPR, ccy*DPR); cx.lineTo((ccx - y*sk)*DPR, (ccy - x*sk)*DPR); }); cx.lineWidth = 3*DPR; cx.strokeStyle = '#857d6e'; cx.stroke(); cx.strokeStyle = INK;
+  CR.pos.forEach(([x, y], i) => { const px = ccx - y*sk, py = ccy - x*sk, v = clamp(S.T[i]/Tmax, 0, 1);
+    cx.beginPath(); cx.arc(px*DPR, py*DPR, mr*DPR, 0, 2*Math.PI); cx.fillStyle = '#fbf7ea'; cx.fill();
+    cx.beginPath(); cx.moveTo(px*DPR, py*DPR); cx.arc(px*DPR, py*DPR, mr*DPR, -Math.PI/2, -Math.PI/2 + v*2*Math.PI); cx.closePath(); cx.fillStyle = '#f4b829'; cx.fill();
+    cx.beginPath(); cx.arc(px*DPR, py*DPR, mr*DPR, 0, 2*Math.PI); cx.lineWidth = 2.6*DPR; cx.strokeStyle = CR.dirs[i] > 0 ? '#e2483d' : '#3f78d8'; cx.stroke();
+    if (mr > 9) txt(Math.round(v*100) + '', px, py + 4, 9.5, INK, 'center', 800); });
+  cx.strokeStyle = INK; txt('NOSE UP', mx0 + mw - 10, my0 + 16, 9.5, '#857d6e', 'right', 800); }
+  // sticks
+  for (const side of ['L', 'R']){ const [x, y, s] = padRect(side), v = SET.stickMode == 1 ? (side === 'L' ? [stick.L[0], stick.R[1]] : [stick.R[0], stick.L[1]]) : stick[side];
+    cx.globalAlpha = .9; panel(x, y, s, s); cx.globalAlpha = 1;
+    cx.beginPath(); cx.moveTo((x + s/2)*DPR, (y + 10)*DPR); cx.lineTo((x + s/2)*DPR, (y + s - 10)*DPR); cx.moveTo((x + 10)*DPR, (y + s/2)*DPR); cx.lineTo((x + s - 10)*DPR, (y + s/2)*DPR); cx.lineWidth = 1*DPR; cx.strokeStyle = '#c9c1b2'; cx.stroke(); cx.strokeStyle = INK;
+    const kx = x + s/2 + v[0]*(s/2 - 16), ky = y + s/2 - v[1]*(s/2 - 16);
+    cx.beginPath(); cx.moveTo((x + s/2)*DPR, (y + s/2)*DPR); cx.lineTo(kx*DPR, ky*DPR); cx.lineWidth = 4*DPR; cx.stroke();
+    cx.beginPath(); cx.arc(kx*DPR, ky*DPR, 11*DPR, 0, 2*Math.PI); cx.fillStyle = '#f4b829'; cx.fill(); cx.lineWidth = 1.8*DPR; cx.stroke();
+    const thrSide = SET.stickMode == 1 ? 'R' : 'L';
+    txt(side === thrSide ? 'THROTTLE / YAW' : 'PITCH / ROLL', x + s/2, y - 6, 10, INK, 'center', 800);
+    if (side === thrSide) txt(Math.round((stick.L[1] + 1)*50) + '%', x + s - 6, y + 14, 10, '#857d6e', 'right', 800); }
+  // messages
+  let msg = S.msgT > 0 ? S.msg : '';
+  if (S.crashed) msg = 'CRASH: ' + S.crashed + '. Press R or Reset for a fresh drone.';
+  else if (!S.armed && !msg) msg = (S.mode === 'acro' || S.mode === 'angle') ? 'Disarmed. Throttle all the way down, then press Enter (or your arm switch) to arm.' : 'Disarmed. Press Enter (or your arm switch) to start the motors, then push the throttle up to climb.';
+  else if (S.armed && S.cellV < 3.5 && Math.floor(S.t*2) % 2) msg = 'LOW BATTERY: land now';
+  if (S.paused) msg = 'Paused (P)';
+  if (msg){ cx.font = `700 ${13*DPR}px ui-monospace,Menlo,monospace`; const words = msg.split(' '), lines = []; let ln = '';
+    for (const wd of words){ if (cx.measureText(ln + ' ' + wd).width/DPR > Math.min(520, VW - 60)) { lines.push(ln); ln = wd; } else ln = ln ? ln + ' ' + wd : wd; } lines.push(ln);
+    const bw = Math.min(560, VW - 40), bh = lines.length*18 + 18, bx = VW/2 - bw/2, by = fpv ? top + 60 : VH*.22;
+    panel(bx, by, bw, bh); cx.fillStyle = S.crashed ? '#fbe0d6' : '#fff1bf'; cx.beginPath(); cx.roundRect((bx + 1.5)*DPR, (by + 1.5)*DPR, (bw - 3)*DPR, (bh - 3)*DPR, 9*DPR); cx.fill();
+    lines.forEach((l, i) => txt(l, VW/2, by + 22 + i*18, 13, INK, 'center')); }
+}
+const fmtT = t => `${Math.floor(t/60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+/* ---------- pointer sticks ---------- */
+function padAt(x, y){ for (const side of ['L', 'R']){ const [px, py, s] = padRect(side); if (x >= px - 20 && x <= px + s + 20 && y >= py - 20 && y <= py + s + 20) return side; } return null; }
+function padVal(side, x, y){ const [px, py, s] = padRect(side); return [clamp((x - px - s/2)/(s/2 - 16), -1, 1), clamp(-(y - py - s/2)/(s/2 - 16), -1, 1)]; }
+cv.addEventListener('pointerdown', e => { const side = padAt(e.clientX, e.clientY); if (!side) return; e.preventDefault(); audioOn();
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  pads[side] = { id: e.pointerId, v: padVal(side, e.clientX, e.clientY) }; if (!padMem.used){ padMem.used = true; padMem.L = SET.stickMode == 1 ? [stick.L[0], stick.R[1]] : stick.L.slice(); padMem.R = SET.stickMode == 1 ? [stick.R[0], stick.L[1]] : stick.R.slice(); } });
+cv.addEventListener('pointermove', e => { for (const side of ['L', 'R']) if (pads[side] && pads[side].id === e.pointerId) pads[side].v = padVal(side, e.clientX, e.clientY); });
+const upPad = e => { for (const side of ['L', 'R']) if (pads[side] && pads[side].id === e.pointerId){
+  // a real-radio feel: the throttle stays, everything else centres (in GPS modes the throttle centres too)
+  const thrAxis = SET.stickMode == 1 ? side === 'R' : side === 'L', springThr = S.mode === 'gps' || S.mode === 'sport' || S.mode === 'cine';
+  padMem[side] = [0, thrAxis && !springThr ? pads[side].v[1] : 0]; pads[side] = null; } };
+cv.addEventListener('pointerup', upPad); cv.addEventListener('pointercancel', upPad);
+
+/* ---------- motor sound: a buzz whose pitch follows the motors ---------- */
+let AC = null, osc = null, osc2 = null, gain = null;
+function audioOn(){ if (AC || !SET.sound) return; try { AC = new (window.AudioContext || window.webkitAudioContext)(); osc = AC.createOscillator(); osc2 = AC.createOscillator(); gain = AC.createGain();
+  const flt = AC.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 1400; osc.type = 'sawtooth'; osc2.type = 'square'; osc.connect(flt); osc2.connect(flt); flt.connect(gain); gain.connect(AC.destination); gain.gain.value = 0; osc.start(); osc2.start(); } catch (e) { AC = null; } }
+function audio(){ if (!AC) return; const Tmax = D.fly.twr*D.fly.mass*G/CR.n, sp = S.T.reduce((a, t) => a + Math.sqrt(Math.max(0, t)/Tmax), 0)/CR.n, base = 60 + 900/Math.sqrt(D.geo.propR);
+  const on = SET.sound && !S.paused && (S.armed || sp > .02) && !S.crashed; gain.gain.setTargetAtTime(on ? .035 + .05*sp : 0, AC.currentTime, .05);
+  osc.frequency.setTargetAtTime(base*(.5 + sp*1.6), AC.currentTime, .03); osc2.frequency.setTargetAtTime(base*(.5 + sp*1.6)*1.5 + 3, AC.currentTime, .03); }
+
+/* ---------- UI wiring ---------- */
+const $ = id => document.getElementById(id);
+const selD = $('selDrone'), selE = $('selEnv');
+for (const d of DL_DRONES.filter(d => d.ready)){ const o = document.createElement('option'); o.value = d.id; o.textContent = d.name; selD.appendChild(o); }
+for (const [k, v] of ENVS){ const o = document.createElement('option'); o.value = k; o.textContent = v; selE.appendChild(o); }
+selD.onchange = () => { D = dlDrone(selD.value); S = null; load(); history.replaceState(null, '', '?d=' + D.id); selD.blur(); };
+selE.onchange = () => { SET.env = selE.value; saveSet(); const c = S.crashes; load(); S.crashes = c; selE.blur(); };
+const views = [['chase', 'Chase'], ['fpv', 'FPV'], ['los', 'Line of sight']];
+const cycleView = () => { const i = views.findIndex(v => v[0] === SET.view); SET.view = views[(i + 1) % views.length][0]; cam.chase = null; saveSet(); syncUI(); };
+const cycleMode = () => { const ms = D.fly.modes, i = ms.indexOf(S.mode); S.mode = ms[(i + 1) % ms.length]; syncUI(); flash('Mode: ' + modeNames[S.mode] + ' (' + { acro:'sticks set rotation rate; nothing self-levels', angle:'sticks set tilt; it levels itself', gps:'sticks set speed; let go to hold position', sport:'faster GPS mode', cine:'slow, smooth GPS mode for filming' }[S.mode] + ')', 2.6); };
+$('bView').onclick = e => { cycleView(); e.target.blur(); };
+$('bMode').onclick = e => { cycleMode(); e.target.blur(); };
+$('bArm').onclick = e => { S.armed ? disarm() : tryArm(); e.target.blur(); syncUI(); };
+$('bReset').onclick = e => { reset(); e.target.blur(); };
+for (const [b, c] of [['bHelp', 'help'], ['bSet', 'set'], ['bHow', 'how']]) $(b).onclick = e => { for (const k of ['help', 'set', 'how']) $(k).hidden = k !== c || !$(k).hidden; e.target.blur(); if (c === 'set') fillSettings(); };
+document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('.card').hidden = true);
+function syncUI(){ selD.value = D.id; selE.value = SET.env; $('bView').textContent = 'View: ' + views.find(v => v[0] === SET.view)[1]; $('bMode').textContent = 'Mode: ' + modeNames[S.mode];
+  $('bArm').textContent = S.armed ? 'Disarm' : 'Arm'; $('bArm').setAttribute('aria-pressed', S.armed); }
+function fillSettings(){
+  const rt = rates(), bind = (id, oid, key, fmt) => { const el = $(id), o = $(oid); el.value = rt[key]; o.textContent = fmt(rt[key]);
+    el.oninput = () => { const r = SET.rates[D.id] = SET.rates[D.id] || {}; r[key] = +el.value; o.textContent = fmt(+el.value); saveSet(); }; };
+  bind('rC', 'oC', 'c', v => v + '°/s'); bind('rM', 'oM', 'm', v => v + '°/s'); bind('rE', 'oE', 'e', v => (+v).toFixed(2)); bind('rY', 'oY', 'y', v => v + '°/s');
+  bind('rU', 'oU', 'up', v => v + '°'); bind('rF', 'oF', 'fov', v => v + '°');
+  $('sW').value = SET.wind; $('sW').onchange = () => { SET.wind = +$('sW').value; saveSet(); };
+  $('sS').value = SET.stickMode; $('sS').onchange = () => { SET.stickMode = +$('sS').value; saveSet(); };
+  $('cA').checked = SET.sound; $('cA').onchange = () => { SET.sound = $('cA').checked; saveSet(); if (SET.sound) audioOn(); };
+  $('bDefaults').onclick = () => { delete SET.rates[D.id]; saveSet(); fillSettings(); };
+  const g = gp, m = SET.map || (g ? defMap(g.id) : defMap('')), mg = $('mapGrid');
+  $('gpName').textContent = g ? '(' + g.id.slice(0, 40) + ')' : '(no controller detected: plug one in and press a button)';
+  mg.innerHTML = '';
+  for (const [k, nm] of [['thr', 'Throttle'], ['yaw', 'Yaw'], ['pitch', 'Pitch'], ['roll', 'Roll']]){
+    const opts = Array.from({ length: 8 }, (_, i) => `<option value="${i}" ${m[k] === i ? 'selected' : ''}>Axis ${i}</option>`).join('');
+    mg.insertAdjacentHTML('beforeend', `<label>${nm}</label><select data-k="${k}">${opts}</select><label style="text-transform:none"><input type="checkbox" data-inv="${k}" ${m.inv && m.inv[k] ? 'checked' : ''}> invert</label>`); }
+  const armOpts = [...Array.from({ length: 8 }, (_, i) => `<option value="a${i}">Switch on axis ${i}</option>`), ...Array.from({ length: 12 }, (_, i) => `<option value="b${i}">Button ${i}</option>`)].join('');
+  mg.insertAdjacentHTML('beforeend', `<label>Arm</label><select data-arm>${armOpts}</select><span></span>`);
+  mg.querySelector('[data-arm]').value = m.arm || 'b0';
+  const save = () => { const nm = { inv:{} }; mg.querySelectorAll('select[data-k]').forEach(s => nm[s.dataset.k] = +s.value); mg.querySelectorAll('[data-inv]').forEach(c => nm.inv[c.dataset.inv] = c.checked); nm.arm = mg.querySelector('[data-arm]').value; SET.map = nm; saveSet(); };
+  mg.querySelectorAll('select,input').forEach(el => el.onchange = save);
+}
+function axesView(){ const el = $('axes'); if ($('set').hidden || !gp) { if (el.childElementCount && !gp) el.innerHTML = ''; return; }
+  el.innerHTML = gp.axes.slice(0, 8).map((v, i) => `<div>Axis ${i} <b>${v.toFixed(2)}</b><i style="left:${50 + Math.min(0, v)*50}%;width:${Math.abs(v)*50}%"></i></div>`).join(''); }
+addEventListener('keydown', e => {
+  if (/input|select|textarea/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(); audioOn();
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
+  if (e.repeat) { keys.add(k); return; }
+  keys.add(k);
+  if (k === 'enter' || k === ' '){ S.armed ? disarm() : tryArm(); syncUI(); }
+  else if (k === 'r') reset(); else if (k === 'v' || k === 'c') cycleView(); else if (k === 'm') cycleMode(); else if (k === 'p') S.paused = !S.paused;
+  else if (k === 'escape') for (const c of ['help', 'set', 'how']) $(c).hidden = true;
+});
+addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+addEventListener('blur', () => keys.clear());
+
+/* ---------- main loop ---------- */
+load(); barBottom = $('bar').getBoundingClientRect().bottom;
+if (Q.get('view')) SET.view = Q.get('view');
+if (Q.get('env')) { SET.env = Q.get('env'); load(); }
+if (Q.get('autofly')){ S.armed = true; S.mode = Q.get('mode') || S.mode; kb.L[1] = +Q.get('autofly'); stick.L[1] = kb.L[1]; }
+if (!store.get('dl-seen-help', false)){ $('help').hidden = false; store.set('dl-seen-help', true); }
+if (Q.get('help') === '0') $('help').hidden = true;
+let last = performance.now(), acc = 0, uiT = 0;
+function frame(now){
+  const dt = Math.min(.05, (now - last)/1000); last = now;
+  readInput(dt);
+  if (Q.get('autofly') && !keys.size && !gpUsed) { kb.L[1] = +Q.get('autofly'); if (Q.get('ap')) kb.R[1] = +Q.get('ap'); }
+  if (!S.paused){ acc += dt; while (acc >= DT){ step(DT); acc -= DT; } }
+  S.msgT -= dt;
+  barBottom = $('bar').getBoundingClientRect().bottom;
+  render(dt); audio();
+  if ((uiT += dt) > .25){ uiT = 0; syncUI(); axesView(); barBottom = $('bar').getBoundingClientRect().bottom;
+    // test hooks: ?probe=1 writes the state into the title, ?autofly=<throttle stick>&ap=<pitch stick> holds the sticks
+    if (Q.get('probe')) document.title = JSON.stringify({ t: +S.t.toFixed(2), pos: S.pos.map(v => +v.toFixed(2)), vel: S.vel.map(v => +v.toFixed(2)), armed: S.armed, crashed: S.crashed, V: +S.cellV.toFixed(2), A: +S.amps.toFixed(1), thr: +stick.L[1].toFixed(2), T: S.T.map(v => +v.toFixed(2)), up: +S.R[8].toFixed(3), msg: S.msg, env: W.id, ncol: W.col.length, rad: CR.rad, foot: CR.foot }); }
+}
+// screen frames drive the loop, with a timer fallback for when frames do not come (a hidden tab, headless tests)
+let pending = false, fbT = 0;
+function sched(){ pending = true; requestAnimationFrame(run); fbT = setTimeout(run, 60); }
+function run(){ if (!pending) return; pending = false; clearTimeout(fbT); frame(performance.now()); sched(); }
+sched();
+window.__S = () => S;
+})();
+</script></body></html>

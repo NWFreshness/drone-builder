@@ -1,0 +1,1488 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drone Lab: assembly</title>
+<style>
+  #fig g.selp path[stroke="#231e16"]{stroke:#d62f8a}
+  .dlinfo{width:100%;max-width:760px;margin:2px 0 14px;border:1.5px solid #231e16;border-radius:12px;background:#fbf7ea;box-shadow:3px 3px 0 #231e16;padding:10px 14px}
+  .dlinfo h2{margin:0 0 4px;font-size:11.5px;letter-spacing:.12em;text-transform:uppercase}
+  .dlinfo p{margin:0;font-size:13px;line-height:1.5}
+  .dlinfo .lg{margin-top:6px;font-size:11.5px;color:#857d6e}
+  .dlinfo .lg b{display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid #231e16;vertical-align:-1px;margin:0 3px 0 8px}
+  .dlinfo .lg b:first-child{margin-left:0}
+</style>
+<style>.mcap{display:none!important}@media (max-width:560px){.stat .v{font-size:20px!important}.stats{align-items:flex-end}}@media (min-width:561px){.vset{top:4px!important}#stats{top:var(--vset-h,44px)!important}}</style><style>@media (max-width:560px){body > header{display:none}}</style><script>window.FIG_A = () => innerWidth <= 560 ? 1.1 : .75;</script><script>window.LBL_U = () => { if (innerWidth > 560) return 0; const s = document.getElementById("fig"); return s && s.clientWidth && s.viewBox.baseVal.width ? s.viewBox.baseVal.width / s.clientWidth : 0; };</script></head><body>
+<script>
+/* ============================================================
+   Colorfigures core: projection, shapes, shading, ink, labels, page shell.
+   A figure page includes this file (scripts/build.py inlines it), then calls mountFigure({...}).
+   See SKILL.md for the drawing contract and conventions.
+   One fixed view (front-left-top) and one fixed light (from above, behind the viewer's right shoulder: the front is lit,
+   the left side is in shade, and cast shadows fall toward the lower left of the screen).
+   ============================================================ */
+
+/* ---------- palettes ---------- */
+const PALS = {
+  mustard: { l:'#f4b829', m:'#d49c1f', d:'#4e4a18' },
+  tomato:  { l:'#ef6a4c', m:'#cf5038', d:'#4a2219' },
+  mint:    { l:'#93d3b0', m:'#71b693', d:'#1f4034' },
+  cobalt:  { l:'#76a0e2', m:'#5a82c6', d:'#1c2948' },
+  blush:   { l:'#f3a6bb', m:'#d8869c', d:'#4b2430' },
+};
+const METAL   = { l:'#eef0f0', m:'#c6ccce', d:'#8f989b' };
+const CLEAR   = { l:'#e4f2f4', m:'#c4dfe4', d:'#97b9c0' };
+const CERAMIC = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
+const DARK    = { l:'#55504a', m:'#3d3935', d:'#272421' };
+const INK = '#231e16';
+const SHADOW = '#41538f';
+
+/* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
+const C = Math.cos(Math.PI/6), S = Math.sin(Math.PI/6);
+let OX = 0, OY = 0;
+/* Free orthographic camera (internal names start with CAM_ / cam so they never clash with a figure's own names). YAW turns the viewer around the vertical axis (45° = the classic front-left view),
+   PITCH is how far it looks down (35.26° = true isometric). At the defaults P() is exactly the old isometric
+   projection, so every figure drawn for it still lines up. Drag the figure to orbit; double-click to reset.
+   rotV(n) maps a world direction into the default view's frame, so vis / tone / any "sum of rotV > 0" test keep
+   working at every angle: the viewer is always (1,1,1) and the light stays put relative to the viewer. */
+let VIEW = 0, RC = [0, 0], RCZ = 0;
+const VIEW_NAMES = ['front', 'left side', 'back', 'right side'];
+const TURNS = [0, 2];
+const YAW0 = 45, PITCH0 = Math.atan(1/Math.SQRT2) * 180/Math.PI, CAM_K = Math.sqrt(1.5);
+let YAW = YAW0, PITCH = PITCH0, CAM_R, CAM_U, CAM_V, CAM_D;                       // right, up, toward viewer, screen-down
+const camBasis = (yaw, pitch) => { const t = yaw*Math.PI/180, p = pitch*Math.PI/180, ct = Math.cos(t), st = Math.sin(t), cp = Math.cos(p), sp2 = Math.sin(p);
+  return { R:[st,-ct,0], U:[-sp2*ct,-sp2*st,cp], V:[cp*ct,cp*st,sp2] }; };
+const CAM_B0 = camBasis(YAW0, PITCH0);
+// CAM_LIM: how far (deg) the camera may turn either side of the front view; null = all the way round (set per figure)
+let CAM_LIM = null;
+function setCam(yaw, pitch){ YAW = CAM_LIM == null ? yaw : Math.max(YAW0 - CAM_LIM, Math.min(YAW0 + CAM_LIM, yaw));
+  PITCH = CAM_LIM == null ? Math.max(6, Math.min(78, pitch)) : Math.max(15, Math.min(62, pitch)); const b = camBasis(YAW, PITCH); CAM_R = b.R; CAM_U = b.U; CAM_V = b.V; CAM_D = CAM_U.map(v => -v); }
+setCam(YAW0, PITCH0);
+const camDot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const rotV = n => { const r = camDot(n,CAM_R), u = camDot(n,CAM_U), v = camDot(n,CAM_V); return [0,1,2].map(i => CAM_B0.R[i]*r + CAM_B0.U[i]*u + CAM_B0.V[i]*v); };
+// the light's ground direction turns with the viewer's yaw only (shadows always fall toward the lower left of the screen)
+const yawTurn = ([x,y]) => { const t = (YAW - YAW0)*Math.PI/180, c = Math.cos(t), s = Math.sin(t); return [x*c - y*s, x*s + y*c]; };
+const rotXY = (x,y) => [x, y];                                                // kept for old callers
+const P0 = (x,y,z) => [(x-y)*C + OX, (x+y)*S - z + OY];                       // raw iso
+const P  = (x,y,z) => { const q = [x-RC[0], y-RC[1], z-RCZ];
+  return [CAM_K*camDot(q,CAM_R) + (RC[0]-RC[1])*C + OX, CAM_K*camDot(q,CAM_D) + (RC[0]+RC[1])*S - RCZ + OY]; };
+const Dv = (x,y,z) => [CAM_K*camDot([x,y,z],CAM_R), CAM_K*camDot([x,y,z],CAM_D)];
+// distance toward the viewer: draw parts with smaller depth first
+const depthOf = p => camDot(p, CAM_V);
+// sort [{at:[x,y,z], svg}] back-to-front for the current camera. A part may also give box:[[x0,y0,z0],[x1,y1,z1]]:
+// when two boxes are separated along x, y or z, the one on the viewer's side goes last (a centre point alone gets long
+// or wrapping parts wrong: a pole beside a row of keys, a spout reaching past a cup).
+const boxMid = b => [0,1,2].map(k => (b[0][k] + b[1][k]) / 2);
+const sepOrder = (p, q) => { if (!p.box || !q.box) return 0;
+  for (let k = 0; k < 3; k++){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? 1 : -1; }
+  return 0; };
+const byDepth = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box)))).map(p => p.svg).join('');
+// the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
+const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
+// an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
+const openShell = (A, B, colour, contents = '') => loft(A, B, colour, true) + contents + loft(A, B, colour);
+const f  = v => v.toFixed(1);
+const pd = (pts, close=true) => 'M' + pts.map(p => { const q = P(p[0],p[1],p[2]); return f(q[0])+' '+f(q[1]); }).join('L') + (close ? 'Z' : '');
+const sp = pts => 'M' + pts.map(q => f(q[0])+' '+f(q[1])).join('L') + 'Z';
+
+/* ---------- 2D shapes in a plane's (u,v) coords (v up), mapped to 3D by a plane ---------- */
+const arcUV  = (cu,cv,r,a0,a1,n=7) => { const o=[]; for (let i=0;i<=n;i++){ const a=(a0+(a1-a0)*i/n)*Math.PI/180; o.push([cu+r*Math.cos(a), cv+r*Math.sin(a)]); } return o; };
+const rrUV   = (u0,v0,u1,v1,r,n=7) => r <= 0 ? rectUV(u0,v0,u1,v1) : [...arcUV(u1-r,v0+r,r,-90,0,n), ...arcUV(u1-r,v1-r,r,0,90,n), ...arcUV(u0+r,v1-r,r,90,180,n), ...arcUV(u0+r,v0+r,r,180,270,n)];
+const rectUV = (u0,v0,u1,v1) => [[u0,v0],[u1,v0],[u1,v1],[u0,v1]];
+const ellUV  = (cu,cv,ru,rv,n=24) => Array.from({length:n}, (_,i) => { const a=i/n*2*Math.PI; return [cu+ru*Math.cos(a), cv+rv*Math.sin(a)]; });
+const PX = x => ([u,v]) => [x,u,v];      // front-facing plane x = const   (u = y, v = z)
+const PY = y => ([u,v]) => [u,y,v];      // side plane y = const           (u = x, v = z)
+const PZ = z => ([u,v]) => [u,v,z];      // horizontal plane z = const     (u = x, v = y)
+const on = (plane, uv) => uv.map(plane);
+
+/* ---------- vectors + shading ---------- */
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{ const l=Math.hypot(...a)||1; return a.map(v=>v/l); };
+const avg=ps=>ps.reduce((s,p)=>[s[0]+p[0]/ps.length,s[1]+p[1]/ps.length,s[2]+p[2]/ps.length],[0,0,0]);
+const vis = n => { const r = rotV(n); return r[0]+r[1]+r[2] > 1e-6; };   // viewer looks from (+1,+1,+1) after the turn
+const facing = vis;                                                       // readable alias: is this face toward the viewer?
+const SHADOW_K = 0.85, AZ_MIN = 20, AZ_MAX = 160;
+// cast shadows are drawn shorter than the shading light implies (0.45 × height instead of 0.85 ×): long shadows of tall
+// parts on thin supports (a lamp shade, a fan head) land far from the object and read as separate blobs
+const SHADOW_LEN = 0.45;
+let L = [0,0,1], SH = [0,0];
+function setLight(deg){ const a=deg*Math.PI/180; SH=[SHADOW_K*Math.cos(a), SHADOW_K*Math.sin(a)]; L=norm([-SH[0],-SH[1],1]); }
+const LIN = norm([.6,.2,1]);                       // fixed light for interiors / small props
+// Three flat tones, but blended across a narrow band at each step, so a face that turns past a threshold while the
+// figure rotates fades between tones instead of snapping (at rest almost every face still sits on a pure tone).
+const SOFT = .18;
+const step3 = (d, hi, lo, m) => { const ss = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a)/(b - a))); return k*k*(3 - 2*k); };
+  const a = ss(hi - SOFT, hi + SOFT, d), b = ss(lo - SOFT, lo + SOFT, d);
+  return a >= 1 ? m.l : b <= 0 ? m.d : a > 0 ? mix(m.m, m.l, a) : b < 1 ? mix(m.d, m.m, b) : m.m; };
+const tone  = (n,m) => step3(dot(rotV(n),L),   -.15, -.45, m);   // exterior, follows the sun
+const toneI = (n,m) => step3(dot(rotV(n),LIN),  .6,   .05, m);   // interior / props
+const mix = (a,b,t) => '#' + [1,3,5].map(i => Math.round(parseInt(a.substr(i,2),16)*(1-t) + parseInt(b.substr(i,2),16)*t).toString(16).padStart(2,'0')).join('');
+const matOf = hex => ({ l:hex, m:mix(hex,'#000000',.16), d:mix(hex,'#000000',.42) });
+const ease = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+
+/* ---------- drawing primitives (all return SVG strings) ---------- */
+const ink   = (d,w=1.0) => `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`;
+const fill  = (d,c,extra='') => `<path d="${d}" fill="${c}" ${extra}/>`;
+const face  = (d,c) => `<path d="${d}" fill="${c}" stroke="${c}" stroke-width=".7" stroke-linejoin="round"/>`;
+const shape = (pts,c,w=.9) => fill(pd(pts),c) + (w ? ink(pd(pts),w) : '');
+const line  = (pts,w=.9) => ink(pd(pts,false),w);
+// Loft between two rings of equal length (closed). colour(n) picks each strip's fill; flip = seen from inside.
+function loft(A, B, colour, flip=false){
+  const n=A.length, cen=avg(A.concat(B)); let s='';
+  for (let i=0;i<n;i++){
+    const a0=A[i], a1=A[(i+1)%n], b1=B[(i+1)%n], b0=B[i];
+    let nr = norm(cross(sub(a1,a0), sub(b0,a0)));
+    if (!isFinite(nr[0])) continue;
+    if (dot(nr, sub(avg([a0,a1,b1,b0]), cen)) < 0) nr = nr.map(v=>-v);
+    if (flip) nr = nr.map(v=>-v);
+    if (vis(nr)) s += face(pd([a0,a1,b1,b0]), colour(nr));
+  }
+  return s;
+}
+function hull(pts){
+  pts = pts.slice().sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  const cr=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]); const lo=[], up=[];
+  for (const p of pts){ while(lo.length>=2 && cr(lo[lo.length-2],lo[lo.length-1],p)<=0) lo.pop(); lo.push(p); }
+  for (const p of pts.reverse()){ while(up.length>=2 && cr(up[up.length-2],up[up.length-1],p)<=0) up.pop(); up.push(p); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+// Silhouette ink, weighted by how thick the part is on screen (like a hand inker): the w you pass is the most it gets.
+// Thickness = 2 × area / perimeter of the outline (a rod's diameter, about half a box's width), as a share of the
+// frame width. A long thin rod, a handle or a knob stays light (~1–1.5); a grinder, kettle or machine body gets the
+// heavy ~2.4–2.8. Thin parts stay thin and parts keep air between them.
+const hullInk = (pts3, w=1.4) => { const h = hull(pts3.map(p=>P(...p))); let a = 0, per = 0;
+  for (let i = 0; i < h.length; i++){ const p = h[i], q = h[(i+1) % h.length]; a += p[0]*q[1] - q[0]*p[1]; per += Math.hypot(q[0]-p[0], q[1]-p[1]); }
+  const thick = per ? Math.abs(a) / per / (INK_K * INK_REF_VB) : 0;
+  return ink(sp(h), Math.min(w, .9 + 20*thick)); };
+// Axis-aligned box: three visible faces, shaded, each outlined. shade = tone (sunlit) or toneI (interior).
+function box(x0,y0,z0,x1,y1,z1,m,shade=toneI,w=.9){
+  // all six faces, drawn only when they face the viewer (sides first, then top) — correct in every VIEW
+  const F = [
+    [[0,1,0],  [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]],
+    [[1,0,0],  [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]],
+    [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1],  [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]] ];
+  return F.filter(([n]) => vis(n)).map(([n,q]) => shape(q, shade(n,m), w)).join('');
+}
+// Rounded-profile extrusion: profile (u=y, v=z) swept along x from x0 to x1. Body of most machines.
+function extrude(profileUV, x0, x1, m, shade=tone){ return loft(on(PX(x0),profileUV), on(PX(x1),profileUV), n=>shade(n,m)); }
+// Vertical cylinder (axis z) centred (x,y), radius r from z0 to z1, with top cap.
+function cyl(x,y,z0,z1,r,m,shade=toneI,w=1.2,n=24){
+  const A=on(PZ(z0),ellUV(x,y,r,r,n)), B=on(PZ(z1),ellUV(x,y,r,r,n));
+  return loft(A,B,nr=>shade(nr,m)) + fill(pd(B),shade([0,0,1],m)) + hullInk([...A,...B],w) + ink(pd(B),w*.8);
+}
+// Cylinder lying along x (e.g. a knob or dial sticking out of a front face): centred (y,z), from x0 to x1.
+function cylX(x0,x1,y,z,r,m,shade=toneI,w=1.1,n=20){
+  const A=on(PX(x0),ellUV(y,z,r,r,n)), B=on(PX(x1),ellUV(y,z,r,r,n));
+  // cap on whichever end faces the viewer (the +x end in VIEW 0)
+  const capB = vis([1,0,0]), cap = capB ? B : A, cn = capB ? [1,0,0] : [-1,0,0];
+  return loft(A,B,nr=>shade(nr,m)) + (vis(cn) ? fill(pd(cap),shade(cn,m)) : '') + hullInk([...A,...B],w) + (vis(cn) ? ink(pd(cap),w*.8) : '');
+}
+// Cylinder between any two 3D points a and b (a lamp arm, a rod, a pipe at an angle, a handle bar), radius r.
+// The end facing the viewer gets a cap. For a tapered part (a cone, a lamp shade) pass r1 for the radius at b.
+function rod(a, b, r, m, shade=toneI, w=1, r1=r, n=16){
+  const d = norm(sub(b, a)), u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u);
+  const ring = (p, rr) => Array.from({length:n}, (_,i) => { const t = i/n*2*Math.PI, c = Math.cos(t)*rr, s2 = Math.sin(t)*rr;
+    return [p[0] + u[0]*c + v[0]*s2, p[1] + u[1]*c + v[1]*s2, p[2] + u[2]*c + v[2]*s2]; });
+  const A = ring(a, r), B = ring(b, r1), capB = vis(d), cap = capB ? B : A, cn = capB ? d : d.map(x => -x);
+  return loft(A, B, nr => shade(nr, m)) + (Math.max(r, r1) > 0 ? fill(pd(cap), shade(cn, m)) + ink(pd(cap), w*.8) : '') + hullInk([...A, ...B], w);
+}
+// Text lying flat on a front plane x = const, centred at (y,z) baseline; reads left-to-right on screen.
+// text sits on a face: if its reading direction comes out mirrored (or edge-on), that face is turned away, so the text is hidden
+const txM = (o, U, V) => (U[0]*V[1] - U[1]*V[0]) <= .02 * Math.hypot(...U) * Math.hypot(...V) ? `matrix(0 0 0 0 ${f(o[0])} ${f(o[1])})` : `matrix(${U[0].toFixed(4)} ${U[1].toFixed(4)} ${V[0].toFixed(4)} ${V[1].toFixed(4)} ${f(o[0])} ${f(o[1])})`;
+const tx = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(0,-1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Text on a side plane y = const, centred at (x,z).
+const txY = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Cast shadow of a set of 3D points (any outline of the object), pushed along the light onto z = 0.
+// the light stays put relative to the viewer, so the shadow is cast in turned coordinates
+// z0: the surface it falls on (a board, a counter); clip it to that surface with clipTo(...) if it could spill off.
+// clip: the 3D outline of the surface it falls on (e.g. boardTop(...)), so it can't spill over the edge.
+const castShadow = (pts3, z0=0, clip=null) => { const k = SHADOW_LEN / SHADOW_K, [sx, sy] = yawTurn(SH);
+  const s = fill(sp(hull(pts3.map(([x,y,z]) => P(x+(z-z0)*sx*k, y+(z-z0)*sy*k, z0)))), SHADOW);
+  return clip ? clipTo(clip, s) : s; };
+// A board for the object to stand on (a tray, a desk top, a counter): a rounded slab from (x0,y0) to (x1,y1), h thick.
+// Draw it first; then castShadow(points, h, boardTop(x0,y0,x1,y1,h,r)) so shadows lie on it and stop at its edge.
+const BOARD = { l:'#e6e1d4', m:'#cfc8b8', d:'#aaa293' }, WOOD = { l:'#d9a86c', m:'#bf8a4f', d:'#8e6236' };
+const boardTop = (x0,y0,x1,y1,h=3,r=5) => on(PZ(h), rrUV(x0,y0,x1,y1,r));
+function board(x0,y0,x1,y1,h=3,r=5,m=BOARD){
+  const A = on(PZ(0), rrUV(x0,y0,x1,y1,r)), B = boardTop(x0,y0,x1,y1,h,r);
+  return loft(A, B, n => toneI(n, m)) + fill(pd(B), m.l) + ink(pd(B), 1) + hullInk([...A, ...B], 1.8);
+}
+// Group helpers: clickable target, clip to an opening.
+const act  = (name, inner, data='') => `<g data-act="${name}" ${data}>${inner}</g>`;
+let _clipN = 0;
+// Part label (for "how does it work" figures): a cream pill with a leader line to a 3D point on the part.
+// dx, dy = where the pill sits, in screen units at the reference zoom (they scale with the figure like stroke widths).
+// on = that part is working right now (the pill turns the accent colour). Labels can be hidden with the Labels switch.
+function tag(p3, dx, dy, text, on=false){
+  // on a phone (LBL_U = drawing units per screen px) the pill is a numbered badge and the names go in a legend under the figure
+  const u = window.LBL_U ? LBL_U() : 0, n = ((window.__ln || (window.__ln = {}))[text] || (__ln[text] = Object.keys(__ln).length + 1));
+  const k = INK_K, [X,Y] = P(...p3), fs = u ? 10*u : 8.6*k, h = u ? 17*u : fs*1.8, w = u ? h*(n > 9 ? 1.3 : 1) : text.length*fs*.62 + fs*1.5, cx = X + dx*k, cy = Y + dy*k;
+  return `<g class="tag${on ? ' on' : ''}" data-n="${n}" data-t="${text}"><path d="M${f(X)} ${f(Y)}L${f(cx)} ${f(cy)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(1.3*k)}" fill="${INK}"/>`
+    + `<rect x="${f(cx-w/2)}" y="${f(cy-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+    + `<text x="${f(cx)}" y="${f(cy+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? n : text}</text></g>`;
+}
+const clipTo = (pts3, inner) => { const id = 'k' + (++_clipN); return `<clipPath id="${id}"><path d="${pd(pts3)}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
+
+/* ---------- constant on-screen line weight ----------
+   Stroke widths are written in model units, and each figure is zoomed to fill the frame, so a small
+   object would get fat lines. INK_K rescales every stroke-width (and the wobble/grain filter) so all
+   figures match the reference zoom of the booth / vending machine (viewBox ≈ 585 units wide). */
+const INK_REF_VB = 585;
+let INK_K = 1;
+const inkScale = svg => INK_K === 1 ? svg : svg.replace(/stroke-width="([\d.]+)"/g, (_, w) => `stroke-width="${(+w * INK_K).toFixed(2)}"`);
+
+/* ---------- page shell ---------- */
+const CORE_CSS = `
+  :root{--paper:#f2efe7;--ink:#231e16;--muted:#857d6e;--rule:#ddd6c8}
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background-color:var(--paper);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .42  0 0 0 0 .39  0 0 0 0 .33  .16 0 0 0 0'/></filter><rect width='100%' height='100%' filter='url(%23p)'/></svg>");
+    overflow-x:hidden;color:var(--ink);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;display:flex;flex-direction:column;align-items:center;padding:24px 16px 32px}
+  header{width:100%;max-width:760px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  header h1{font-size:13px;font-weight:600;margin:0;letter-spacing:.02em} header span{color:var(--muted)}
+  #fig{width:100%;max-width:760px;height:auto;display:block;margin:4px 0 8px;user-select:none;overflow:visible}
+  #fig{cursor:grab;touch-action:pan-y} #fig.drag{cursor:grabbing} #fig [data-act]{cursor:pointer}
+  #readout, .idea{display:none}   /* status line + big idea are off: the buttons and motion tell the story */
+  .idea{width:100%;max-width:760px;margin:-6px 0 16px;font-size:12.5px;line-height:1.5;text-align:center;color:var(--ink)}
+  .idea strong{letter-spacing:.12em;text-transform:uppercase;font-size:11px;margin-right:8px}
+  #readout{position:relative;min-height:1.4em;letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px;text-align:center;text-shadow:0 0 3px var(--paper),0 0 6px var(--paper),0 0 10px var(--paper)}
+  .stage{position:relative;width:100%;max-width:760px}
+  .actions{position:absolute;top:4px;left:0;display:flex;flex-direction:column;align-items:flex-start;gap:8px;z-index:2;max-width:220px}
+  .actions .cap{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 2px}
+  html.nolabels #fig .tag{display:none}
+  .ctl[hidden]{display:none}
+  /* ui.flash(text): a short note under the buttons ("the can is empty — refill it"); the status line itself stays hidden */
+  .toast{position:absolute;left:0;z-index:3;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;background:var(--paper);
+    border:1.5px solid var(--ink);border-radius:8px;padding:4px 9px;box-shadow:2px 2px 0 var(--ink);opacity:0;transition:opacity .2s;pointer-events:none;max-width:240px}
+  .toast.show{opacity:1}
+  .made-with{width:100%;max-width:760px;margin-top:18px;text-align:right;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  .made-with a{color:var(--muted);text-decoration:none} .made-with a:hover{color:var(--ink)}
+  .stats{position:absolute;top:4px;right:0;display:flex;flex-direction:column;align-items:flex-end;gap:10px;z-index:2;text-align:right}
+  .stat .k{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-size:34px;font-weight:800;line-height:1.05;letter-spacing:-.01em;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .stat.small .v{font-size:20px}
+  .stat .v.bump{animation:bump .35s ease-out}
+  @keyframes bump{0%{transform:scale(1.18)}100%{transform:none}}
+  .stepwrap{position:relative;display:flex;align-items:center;gap:8px}
+  .act{font:inherit;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer;white-space:nowrap}
+  .act:hover{background:color-mix(in srgb,var(--paper) 92%,var(--ink))}
+  .act .car{margin-left:6px;font-size:10px}
+  .act:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+  .chips{display:none;flex-wrap:wrap;gap:6px;background:var(--paper);border:2px solid var(--ink);border-radius:12px;box-shadow:3px 3px 0 var(--ink);
+    padding:8px;width:max-content;max-width:min(300px,62vw);position:absolute;left:calc(100% + 10px);top:-4px;z-index:3}
+  .stepwrap.open .chips{display:flex}
+  .chip{white-space:nowrap;font:inherit;font-size:11.5px;font-weight:700;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:8px;padding:4px 8px;cursor:pointer;box-shadow:2px 2px 0 var(--ink)}
+  .chip:hover{background:var(--accent,#f4b829);transform:translate(-1px,-1px)}
+  .chip.current{background:var(--ink);color:var(--paper)} .chip.current:hover{background:var(--ink);transform:none}
+  .chip.off{opacity:.45} .chip.off:hover{transform:none;background:var(--paper)}
+  
+  @media (max-width:560px){body{padding:14px 12px 24px}header span,.actions .cap{display:none}.actions{flex-direction:row;flex-wrap:wrap;gap:6px}.act{font-size:12px;padding:4px 11px}.stats{position:static;flex-direction:row;justify-content:flex-end;gap:18px;margin-bottom:4px}.actions{position:static;max-width:none;margin:6px 0 4px}.chips{left:0;top:calc(100% + 8px)}}
+  .controls{width:100%;max-width:760px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px 28px;border-top:1px solid var(--rule);padding-top:16px}
+  .ctl{display:flex;flex-direction:column;gap:6px}
+  .ctl label{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  input[type=range]{width:100%;accent-color:var(--ink)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;color:var(--ink);background:transparent;border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer}
+  button:hover{background:#0000000d}
+  button[aria-pressed=true]:not(.sw){background:var(--ink);color:var(--paper)}
+  .sw{width:26px;height:26px;padding:0;border-radius:50%} .sw[aria-pressed=true]{outline:2px solid var(--ink);outline-offset:2px}`;
+
+const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB">
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.045/k).toFixed(4)}" numOctaves="2" seed="4" result="warp"/>
+  <feDisplacementMap id="wob" in="SourceGraphic" in2="warp" scale="${(2.4*k).toFixed(2)}" xChannelSelector="R" yChannelSelector="G" result="wob"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.9/k).toFixed(4)}" numOctaves="3" seed="11" result="n1"/>
+  <feColorMatrix in="n1" type="matrix" values=".3 0 0 0 .84  .3 0 0 0 .84  .3 0 0 0 .84  0 0 0 0 1" result="grain"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.012/k).toFixed(4)}" numOctaves="2" seed="7" result="n2"/>
+  <feColorMatrix in="n2" type="matrix" values=".3 0 0 0 .85  .3 0 0 0 .85  .3 0 0 0 .85  0 0 0 0 1" result="blot"/>
+  <feBlend in="wob" in2="grain" mode="multiply" result="g1"/><feBlend in="g1" in2="blot" mode="multiply" result="g2"/>
+  <feComposite in="g2" in2="wob" operator="in"/></filter>`;
+
+/* mountFigure({
+     fig:'03', title:'Photo booth', hint:'click the curtain…',
+     size:[W,D,H],                 // bounding box, used to frame the view (shadow range included)
+     palette:'mustard',            // default PALS key
+     state:{...},                  // figure state (st.pal is built in)
+     scene: (st, m) => svgString,  // m = current palette {l,m,d}
+     readout: st => 'text',        // status line under the figure
+     buttons: [{label, onClick(st, ui)}      // listed in the order the user should do them
+               | {label, choices: st => [{label, onClick(st,ui), current?, disabled?, why?}]}],   // opens a picker
+     stats: st => [{label, value, small?}],   // optional: big numbers top-right (credit, change, score)
+     credit: false,                // optional: hide the small "Made with Colorfigures" link
+     acts: { name(st, el, ui){} },  // clicks on act(name, …) groups; el has dataset
+     params(st, q){}               // optional: read URLSearchParams for screenshot states
+   })  -> ui = { st, render, animate(stepFn), flash(text,ms) }
+   animate(step): calls step(dt seconds) every frame and re-renders until step returns false. */
+addEventListener('error', e => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + e.message + ';'; });
+/* The hand-drawn filter's noise never changes, but browsers recompute every feTurbulence each time the drawing changes
+   (on phones SVG filters run on the CPU, so this is most of the cost of a frame). bakeNoise renders each noise layer once
+   into an image and swaps it in: coarse layers as one small image over the whole view (they are smooth, so scaling up
+   is invisible), fine grain as a seamless tile. If anything fails (an old browser), the live filter simply stays. */
+function bakeNoise(svg){
+  const fl = document.getElementById('hand'); if (!fl || typeof Image === 'undefined') return;
+  const NS = 'http://www.w3.org/2000/svg', vb = svg.viewBox.baseVal;
+  const x0 = vb.x - vb.width*.35, y0 = vb.y - vb.height*.35, w0 = vb.width*1.7, h0 = vb.height*1.7;
+  for (const t of [...fl.querySelectorAll('feTurbulence')]){
+    const fq = parseFloat(t.getAttribute('baseFrequency')), oct = +(t.getAttribute('numOctaves') || 1);
+    if (!(fq > 0)) continue;
+    const fine = fq * Math.max(w0, h0) > 80;
+    if (fine) continue;   // fine grain stays live: a repeated tile leaves faint seams on some GPUs
+    const rx = fine ? 0 : x0, ry = fine ? 0 : y0, rw = fine ? 48 / fq : w0, rh = fine ? 48 / fq : h0;
+    const ppu = fq * (fine ? 7 : 5) * Math.pow(2, Math.max(0, oct - 1) * .5), PW = Math.ceil(rw * ppu), PH = Math.ceil(rh * ppu);
+    if (PW * PH > 1200 * 1200) continue;
+    const tb = t.cloneNode(); tb.removeAttribute('result'); if (fine) tb.setAttribute('stitchTiles', 'stitch');
+    const src = `<svg xmlns="${NS}" width="${PW}" height="${PH}" viewBox="${rx} ${ry} ${rw} ${rh}"><filter id="n" filterUnits="userSpaceOnUse" x="${rx}" y="${ry}" width="${rw}" height="${rh}" color-interpolation-filters="sRGB">${tb.outerHTML}</filter><rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" filter="url(#n)"/></svg>`;
+    const img = new Image();
+    img.onload = () => { try {
+      const c = document.createElement('canvas'); c.width = PW; c.height = PH; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      // store the noise's colour values fully opaque: the filter reads its colour channels, and an image with
+      // see-through pixels would be read premultiplied (darker) by some browsers
+      const px = g.getImageData(0, 0, PW, PH); for (let i = 3; i < px.data.length; i += 4) px.data[i] = 255; g.putImageData(px, 0, 0);
+      const url = c.toDataURL('image/png'), res = t.getAttribute('result');
+      const im = document.createElementNS(NS, 'feImage');
+      // a tile must sit inside the filter's region (the drawing's box) or it gets clipped: anchor it at the drawing's
+      // centre, snapped to whole tiles so the grain keeps the same phase as the live noise would
+      let ox = rx, oy = ry;
+      if (fine){ const bb = svg.getElementById ? document.getElementById('art').getBBox() : { x: 0, y: 0, width: 0, height: 0 };
+        ox = Math.floor((bb.x + bb.width/2) / rw) * rw; oy = Math.floor((bb.y + bb.height/2) / rh) * rh; }
+      for (const [k, v] of [['x', ox], ['y', oy], ['width', rw], ['height', rh], ['preserveAspectRatio', 'none']]) im.setAttribute(k, v);
+      im.setAttribute('href', url); im.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', url);
+      if (!t.isConnected) return;
+      if (fine){ im.setAttribute('result', res + '_tile'); const tl = document.createElementNS(NS, 'feTile'); tl.setAttribute('in', res + '_tile'); tl.setAttribute('result', res); t.replaceWith(im, tl); }
+      else { im.setAttribute('result', res); t.replaceWith(im); }
+    } catch (e) {} };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+  }
+}
+function mountFigure(cfg){
+  document.title = cfg.title;
+  const style = document.createElement('style'); style.textContent = CORE_CSS; document.head.appendChild(style);
+  document.body.innerHTML = `
+    <header><h1>Fig. ${cfg.fig} — ${cfg.title}</h1></header>
+    <div class="stage">
+      ${cfg.buttons && cfg.buttons.length ? `<div class="actions" id="btns"></div>` : ''}
+      ${cfg.stats ? '<div class="stats" id="stats"></div>' : ''}
+      <div class="toast" id="toast" role="status"></div>
+      <svg id="fig" role="img" aria-label="${cfg.title}"><defs id="fdefs"></defs><g id="art" filter="url(#hand)"></g></svg>
+    </div>
+    <div id="readout"></div>
+    ${cfg.idea ? `<p class="idea"><strong>The big idea</strong>${cfg.idea}</p>` : ''}
+    <div class="controls">
+      <div class="ctl"><label for="wb">Hand-drawn wobble</label><input id="wb" type="range" min="0" max="7" step="0.1" value="2.4"></div>
+      <div class="ctl"><label>Colour</label><div class="row" id="pals"></div></div>
+      <div class="ctl"><label>View</label><div class="row"><button id="vreset">Front view</button><button id="vspin" aria-pressed="false">Turntable</button></div></div>
+      <div class="ctl" id="lblctl" hidden><label>Labels</label><div class="row"><button id="lbl" aria-pressed="true">On</button></div></div>
+    </div>
+    ${cfg.credit === false ? '' : '<footer class="made-with"><a href="https://april-zhu.com/colorfigures" target="_blank" rel="noopener">Made with Colorfigures ↗</a></footer>'}`;
+  const st = cfg.state || {};            // kept as the same object, so a figure may hold on to it
+  if (!st.pal) st.pal = cfg.palette || 'mustard';
+  if (st.az == null) st.az = 105;
+  const q = new URLSearchParams(location.search);
+  // a figure turns all the way round only once it has been checked from every side (turn:'full'); otherwise it turns
+  // +-60 deg around the front, where it was drawn. ?free=1 unlocks it for testing.
+  CAM_LIM = cfg.turn === 'full' || q.get('free') === '1' ? null : 60;
+  if (PALS[q.get('pal')]) st.pal = q.get('pal');
+  if (cfg.params) cfg.params(st, q);
+
+  // frame on the object itself: centred, filling ~60% of the width / ~78% of the height of a 4:3 view.
+  // The cast shadow is allowed to spill outside the frame (svg overflow is visible).
+  const [W,D,H] = cfg.size, pts = [];
+  OX = OY = 0; RC = cfg.center || [W/2, D/2]; RCZ = H/2;
+  VIEW = 0; setCam(YAW0, PITCH0);
+  for (const x of [0,W]) for (const y of [0,D]) for (const z of [0,H]) pts.push(P(x,y,z));
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const bw = Math.max(...xs)-Math.min(...xs), bh = Math.max(...ys)-Math.min(...ys);
+  // the object fills ~74% of the width / ~88% of the height, nudged right of centre so the buttons (top left) stay clear
+  // on a phone (FIG_A, from the gallery) the frame grows taller than 4:3, as far as the object needs, so tall machines fill it;
+  // the spare height goes mostly below; the object stays centred (its shadow may run off the edge, by the owner's call)
+  const PA = window.FIG_A ? FIG_A() : .75, A = PA === .75 ? .75 : Math.min(PA, Math.max(.75, bh/.88/(bw/.74)*1.08)), vbW = Math.max(bw/.74, bh/.88/A), vbH = vbW*A;
+  OX = (vbW-bw)/2 + (PA === .75 ? vbW*.06 : 0) - Math.min(...xs); OY = (PA === .75 ? vbH*.04 : (vbH - bh)*.3) - Math.min(...ys);   // sit a little high: shadows fall downward
+  const svg = document.getElementById('fig');
+  svg.setAttribute('viewBox', `0 0 ${f(vbW)} ${f(vbH)}`);
+  INK_K = vbW / INK_REF_VB;
+  document.getElementById('fdefs').innerHTML = filterFor(INK_K);
+  bakeNoise(svg);
+
+  const art = document.getElementById('art'), readout = document.getElementById('readout');
+  const ui = { st };
+  ui.render = () => { _clipN = 0; document.documentElement.style.setProperty('--accent', PALS[st.pal].l); art.innerHTML = inkScale(cfg.scene(st, PALS[st.pal])); if (!ui._flash) readout.textContent = cfg.readout ? cfg.readout(st) : ''; if (ui.drawStats) ui.drawStats(); };
+  // big numbers in the top-right corner (credit, change, score…); a value that changes gets a little bump
+  const statsEl = document.getElementById('stats'), prevStats = {};
+  ui.drawStats = () => { if (!statsEl) return;
+    const list = cfg.stats(st).filter(Boolean), html = list.map(x => `<div class="stat${x.small ? ' small' : ''}"><div class="k">${x.label}</div><div class="v" data-k="${x.label}">${x.value}</div></div>`).join('');
+    if (statsEl._html !== html){ statsEl._html = html; statsEl.innerHTML = html;
+      statsEl.querySelectorAll('.v').forEach(v => { if (prevStats[v.dataset.k] != null && prevStats[v.dataset.k] !== v.textContent) v.classList.add('bump'); prevStats[v.dataset.k] = v.textContent; }); } };
+  let flashT = 0;
+  const toast = document.getElementById('toast');
+  ui.flash = (text, ms=1600) => { ui._flash = true; readout.textContent = text; toast.textContent = text;
+    toast.style.top = ((document.getElementById('btns') ? document.getElementById('btns').offsetTop + document.getElementById('btns').offsetHeight : 0) + 8) + 'px'; toast.classList.add('show');
+    clearTimeout(flashT); flashT = setTimeout(() => { ui._flash = false; toast.classList.remove('show'); ui.render(); }, ms); };
+  // One frame driver for every running animation: each frame runs all the steps, then draws once (two animations at
+  // the same time no longer draw twice). It follows the screen's frames, with a timer fallback for when frames don't
+  // come (headless shots, a hidden tab). ui.invalidate() asks for one redraw on the next frame (used while dragging).
+  const steps = new Set(); let driving = false, lastT = 0, fbT = 0;
+  const frame = () => { if (!driving) return; driving = false; clearTimeout(fbT);
+    const now = performance.now(), dt = Math.max(0, Math.min(.05, (now - lastT) / 1000)); lastT = now;
+    for (const s of [...steps]) if (s(dt) === false) steps.delete(s);
+    ui.render(); if (steps.size) drive(); };
+  const drive = () => { if (driving) return; driving = true; requestAnimationFrame(frame); fbT = setTimeout(frame, 60); };
+  ui.animate = step => { if (!steps.size && !driving) lastT = performance.now(); steps.add(step); drive(); };
+  ui.invalidate = () => drive();
+
+  // clickable parts react on press, not on click: while something animates, the scene is redrawn every frame, so the
+  // element under the pointer is replaced between press and release and a 'click' would never fire
+  svg.addEventListener('pointerdown', e => { if (e.button) return; const a = e.target.closest('[data-act]'); if (!a || !cfg.acts || !cfg.acts[a.dataset.act]) return;
+    e.preventDefault(); cfg.acts[a.dataset.act](st, a, ui); ui.render(); });
+  // orbit: drag anywhere that is not a clickable part (the machine turns the way the finger moves); arrow keys nudge; double-click eases back to the front view
+  let drag = null, spin = false, camAnim = 0;
+  const camTo = (y, p, ms=700) => { const y0 = YAW, p0 = PITCH, dy = ((y - y0 + 540) % 360) - 180, id = ++camAnim; let t = 0;
+    ui.animate(dt => { if (id !== camAnim) return false; t += dt*1000; const k = Math.min(1, t / ms), e = ease(k); setCam(y0 + dy*e, p0 + (p - p0)*e); return k < 1; }); };
+  ui.camTo = camTo;
+  svg.addEventListener('pointerdown', e => { if (e.button || e.target.closest('[data-act]')) return;
+    camAnim++; drag = { x:e.clientX, y:e.clientY, yaw:YAW, pitch:PITCH }; svg.classList.add("drag"); try { svg.setPointerCapture(e.pointerId); } catch {} });
+  svg.addEventListener('pointermove', e => { if (!drag) return; const k = 300 / svg.getBoundingClientRect().width;
+    setCam(drag.yaw + (e.clientX - drag.x)*.55*k, drag.pitch + (e.clientY - drag.y)*.35*k); ui.invalidate(); });
+  const endDrag = () => { drag = null; svg.classList.remove('drag'); };
+  svg.addEventListener('pointerup', endDrag); svg.addEventListener('pointercancel', endDrag);
+  svg.addEventListener('dblclick', e => { if (!e.target.closest('[data-act]')) camTo(YAW0, PITCH0); });
+  addEventListener('keydown', e => { const k = { ArrowLeft:[-15,0], ArrowRight:[15,0], ArrowUp:[0,8], ArrowDown:[0,-8] }[e.key];
+    if (!k || window.GAME_KEYS || /input|textarea/i.test(e.target.tagName)) return; e.preventDefault(); camTo(YAW + k[0], PITCH + k[1], 260); });   // a game figure keeps the arrows for play
+  document.getElementById('vreset').onclick = () => { spin = false; vsp.setAttribute('aria-pressed', false); camTo(YAW0, PITCH0); };
+  const vsp = document.getElementById('vspin');
+  vsp.onclick = () => { spin = !spin; vsp.setAttribute('aria-pressed', spin); camAnim++;
+    let dir = 1;   // with a turning limit, the turntable swings back and forth inside it
+    if (spin) ui.animate(dt => { if (!spin) return false; if (!drag){ let y = YAW + dir*dt*18;
+      if (CAM_LIM != null && Math.abs(y - YAW0) >= CAM_LIM - .5){ dir = -dir; y = YAW + dir*dt*18; } setCam(y, PITCH); } return true; }); };
+  if (q.has('yaw') || q.has('pitch')) setCam(+(q.get('yaw') ?? YAW0), +(q.get('pitch') ?? PITCH0));
+  const btns = document.getElementById('btns');
+  const stepEls = [];
+  if (btns) cfg.buttons.forEach((b, i) => {
+    const wrap = document.createElement('div'); wrap.className = 'stepwrap';
+    const el = document.createElement('button'); el.className = 'act';
+    el.innerHTML = `${b.label}${b.choices ? '<span class="car">▾</span>' : ''}`;
+    wrap.appendChild(el); btns.appendChild(wrap); stepEls.push(el);
+    if (!b.choices){ el.onclick = () => { closeChips(); b.onClick(st, ui); ui.render(); }; return; }
+    const chips = document.createElement('div'); chips.className = 'chips'; wrap.appendChild(chips);
+    el.onclick = e => { e.stopPropagation(); const open = !wrap.classList.contains('open'); closeChips();
+      if (!open) return;
+      chips.innerHTML = '';
+      // every choice stays clickable, so nothing silently ignores a press:
+      //   current:true  = the one in use (shown selected); a press just says so
+      //   disabled:true = not possible right now (shown faded); a press says why (c.why, or a generic note)
+      for (const c of b.choices(st)){ const ch = document.createElement('button'); ch.className = 'chip' + (c.current ? ' current' : c.disabled ? ' off' : ''); ch.textContent = c.label;
+        if (c.current) ch.setAttribute('aria-pressed', 'true');
+        ch.onclick = ev => { ev.stopPropagation(); closeChips();
+          if (c.current) return ui.flash(`${c.label} — already set`);
+          if (c.disabled) return ui.flash(c.why || `${c.label} isn't possible right now`);
+          c.onClick(st, ui); ui.render(); }; chips.appendChild(ch); }
+      wrap.classList.add('open'); };
+  });
+  function closeChips(){ document.querySelectorAll('.stepwrap.open').forEach(w => w.classList.remove('open')); }
+  document.addEventListener('click', closeChips);
+
+  document.getElementById('wb').oninput = e => document.getElementById('wob').setAttribute('scale', (e.target.value * INK_K).toFixed(2));
+  const pals = document.getElementById('pals');
+  for (const [k,p] of Object.entries(PALS)){
+    const b = document.createElement('button'); b.className='sw'; b.title=k; b.style.background=p.l; b.setAttribute('aria-pressed', k===st.pal);
+    b.onclick = () => { st.pal=k; [...pals.children].forEach(c=>c.setAttribute('aria-pressed', c===b)); ui.render(); };
+    pals.appendChild(b);
+  }
+  // labels: the switch appears when the figure draws any tag(); ?labels=0 starts with them hidden
+  const lblctl = document.getElementById('lblctl'), lbl = document.getElementById('lbl');
+  const setLabels = on => { document.documentElement.classList.toggle('nolabels', !on); lbl.textContent = on ? 'On' : 'Off'; lbl.setAttribute('aria-pressed', on); };
+  lbl.onclick = () => setLabels(document.documentElement.classList.contains('nolabels'));
+  if (q.get('labels') === '0') setLabels(false);
+  // testing: ?press=Label@ms,Label@ms clicks the buttons whose text starts with Label at those times after load
+  // (any order, repeats allowed); Label>Choice picks a choice from a picker button (?press=Speed>3@300).
+  // Script errors and unknown labels are recorded on <html data-errors="…">
+  window.__st = st;
+  const noteErr = m => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + m + ';'; };
+  const starts = (el, t) => el.textContent.trim().toLowerCase().startsWith(t.trim().toLowerCase());
+  if (q.has('press')) q.get('press').split(',').forEach(item => { const [what, ms] = item.split('@'), [label, choice] = what.split('>');
+    setTimeout(() => { const b = [...document.querySelectorAll('.act')].find(b => starts(b, label));
+      if (!b) return noteErr(`no button "${label}"`);
+      b.click(); if (choice == null) return;
+      const c = [...b.parentElement.querySelectorAll('.chip')].find(c => starts(c, choice));
+      if (c && !c.disabled) c.click(); else noteErr(`no choice "${choice}" in "${label}"`); }, +ms || 0); });
+  setLight(st.az); ui.render();
+  if (art.querySelector('.tag')) lblctl.hidden = false;
+  return ui;
+}
+
+/* ---------- see-through + labels kit (shared; the figure supplies its own working parts) ----------
+   xrCallouts(items, B): pills in two columns either side of the object, sorted top to bottom so leaders never cross.
+     items: [{ at:[x,y,z], text, on }], B: the object's bounds [x0, x1, y0, y1, z0, z1].
+   xrGhost(body, mech, k, OUTp, x0, x1, m): far walls faintly, the working parts, then the case as a ghost over them.
+   xrMount(getUI, caption): the See-through / Labels switches (top right), the caption under the figure, label hiding. */
+function xrCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  // on a phone (LBL_U = drawing units per screen px) each label is a numbered badge and the names go in a legend under the figure
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const L = [], R = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  for (const it of items){ const [X, Y] = P(...it.at); ((X < cx && roomL) || !roomR ? L : R).push({ ...it, X, Y }); }
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function xrGhost(body, mech, k, OUTp, x0, x1, m){
+  const fF = facing([1,0,0]), fB = facing([-1,0,0]);
+  const far = `<g opacity="${f(.5*k)}">` + loft(on(PX(x0), OUTp), on(PX(x1), OUTp), n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true)
+    + (fF ? fill(pd(on(PX(x0), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + (fB ? fill(pd(on(PX(x1), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...on(PX(x0), OUTp), ...on(PX(x1), OUTp)], 2.8) + `</g>`;
+}
+function xrMount(getUI, caption, opt = {}){   // opt.labelsOnly: only the Labels switch (the insides are on show already)
+  const ui = getUI(), q = new URLSearchParams(location.search), html = document.documentElement;
+  if (q.get('labels') !== '1') html.classList.add('nolabels');
+  if (ui.st.xr == null){ ui.st.xr = 0; ui.st.xrT = 0; }
+  if (q.get('xr') === '1') ui.st.xr = ui.st.xrT = 1;
+  const old = document.getElementById('lblctl'); if (old) old.style.display = 'none';
+  const vset = document.createElement('div'); vset.className = 'vset';
+  vset.innerHTML = '<div class="vrow">' + (opt.labelsOnly ? '' : '<button class="act" id="xrb" aria-pressed="false">See-through</button>') + '<button class="act" id="lblb" aria-pressed="false">Labels</button></div>';
+  document.querySelector('.stage').appendChild(vset);
+  // pages with a stats panel in the top right: the switches go just under it
+  const place = () => { const sp = document.getElementById('stats'); vset.style.top = sp ? (sp.offsetTop + sp.offsetHeight + 10) + 'px' : ''; };
+  place(); new ResizeObserver(place).observe(document.getElementById('stats') || vset);
+  const xrb = document.getElementById('xrb'), lblb = document.getElementById('lblb');
+  const sync = () => { if (xrb) xrb.setAttribute('aria-pressed', !!getUI().st.xrT); lblb.setAttribute('aria-pressed', !html.classList.contains('nolabels')); };
+  if (xrb) xrb.onclick = () => { const u = getUI(), st = u.st; st.xr = st.xr || 0; st.xrT = st.xrT ? 0 : 1; sync();
+    u.animate(dt => { const g = Math.sign(st.xrT - st.xr); st.xr = Math.min(1, Math.max(0, st.xr + g*dt/.7)); return st.xr !== st.xrT; }); };
+  lblb.onclick = () => { html.classList.toggle('nolabels'); sync(); };
+  sync();
+  const cap = document.createElement('p'); cap.className = 'mcap'; document.querySelector('.stage').after(cap);
+  const css = document.createElement('style');
+  css.textContent = '.vset{position:absolute;top:4px;right:0;z-index:2}.vrow{display:flex;gap:6px}.vset .act[aria-pressed=true]{background:var(--ink);color:var(--paper)}'
+    + 'html.nolabels #fig .tag{display:none}.mcap{width:100%;max-width:760px;min-height:3em;margin:0 0 14px;font-size:12.5px;line-height:1.5;text-align:center;transition:opacity .3s}'
+    + '@media (max-width:560px){.vset{position:static;margin:4px 0}}';
+  document.head.appendChild(css);
+  const r0 = ui.render; ui.render = () => { r0(); const st = getUI().st; cap.style.opacity = st.xr > .5 ? 1 : 0; cap.textContent = caption(st); };
+  ui.render();
+}
+// same, for a body lofted between two horizontal rings A (bottom) and B (top)
+function xrGhostRings(body, mech, k, A, B, m){
+  const far = `<g opacity="${f(.5*k)}">` + loft(A, B, n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true) + fill(pd(A), mix(m.d, '#f2efe7', .5)) + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...A, ...B], 2.8) + `</g>`;
+}
+// generic see-through for any figure: the whole drawing fades back and the inside parts show over it.
+//   opts: { mech(st, k) -> svg, inside(st) -> label items, surface(st) -> label items (optional), B: bounds, getSt() }
+// washer-style ghost for an object without a single box case: its inside parts first, then the object pale over them
+const xrUnder = (svg, mech, k) => `<g opacity="${f(k)}">${mech}</g><g opacity="${f(1 - .62*k)}">${svg}</g>`;
+function xrWrap(sceneFn, opts){
+  return function(){
+    let s = sceneFn.apply(this, arguments);
+    const st = opts.getSt(), k = ease(st.xr || 0);
+    if (k > 0 && opts.under) s = xrUnder(s, opts.mech(st, k), k);   // the whole drawing is the object
+    else if (k > 0 && !opts.inline) s = `<g opacity="${f(1 - .5*k)}">${s}</g><g opacity="${f(k)}">${opts.mech(st, k)}</g>`;   // inline: the figure ghosts its own case
+    const items = k > .6 ? opts.inside(st) : opts.surface ? opts.surface(st) : [];
+    return s + (items.length ? xrCallouts(items, opts.B) : '');
+  };
+}
+
+/* ---------- game keypad: mountKeypad({ rows, hub:[col,row], action:'DROP', keys:[{ key:'ArrowLeft', glyph:'\u25c0', name, at:[col,row] }] })
+   An inked pad under the buttons that sends the same keyboard events as the arrows and space (set window.GAME_KEYS = true
+   so the arrows play instead of turning the camera). ---------- */
+function mountKeypad(spec){
+  const host = document.getElementById('btns'); if (!host) return;
+  const css = document.createElement('style');
+  css.textContent = `.kpad{display:flex;align-items:center;gap:16px;margin-top:6px;padding:10px 12px;border:1.5px solid var(--ink);border-radius:14px;
+      background:var(--paper);box-shadow:0 3px 0 var(--ink);touch-action:none;user-select:none;-webkit-user-select:none}
+    .kpad .dp{display:grid;grid-template-columns:repeat(3,34px);grid-template-rows:repeat(var(--rows),34px);gap:3px}
+    .kpad .k{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:34px;height:34px;cursor:pointer;
+      background:#fbf7ea;border:1.5px solid var(--ink);border-radius:7px;box-shadow:0 3px 0 var(--ink);color:var(--ink);font:700 13px ui-monospace,Menlo,monospace;
+      transition:transform .05s,box-shadow .05s,background .05s}
+    .kpad .hub{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
+    .kpad .hub i{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--ink);background:#e6e0d1}
+    .kpad .go{all:unset;box-sizing:border-box;width:62px;height:62px;border-radius:50%;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:#e2483d;border:1.5px solid var(--ink);box-shadow:0 4px 0 var(--ink),inset 0 -5px 0 rgba(0,0,0,.18);color:#fff;font:800 12px ui-monospace,Menlo,monospace;letter-spacing:.06em;
+      transition:transform .05s,box-shadow .05s}
+    .kpad .go small{font:700 8px ui-monospace,Menlo,monospace;opacity:.85;letter-spacing:.08em;margin-top:2px}
+    .kpad .down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+    .kpad .k.down{background:var(--accent,#f4b829)}
+    .kpad .go.down{transform:translateY(3px);box-shadow:0 1px 0 var(--ink),inset 0 -3px 0 rgba(0,0,0,.18)}
+    @media (max-width:560px){.kpad{gap:22px;padding:10px 16px}.kpad .dp{grid-template-columns:repeat(3,44px);grid-template-rows:repeat(var(--rows),44px)}
+      .kpad .k,.kpad .hub{width:44px;height:44px;font-size:15px}.kpad .go{width:74px;height:74px}}`;
+  document.head.appendChild(css);
+  const pad = document.createElement('div'); pad.className = 'kpad'; pad.setAttribute('role', 'group'); pad.setAttribute('aria-label', 'Keypad');
+  const dp = document.createElement('div'); dp.className = 'dp'; dp.style.setProperty('--rows', spec.rows);
+  const els = {};
+  for (const k of spec.keys){
+    const b = document.createElement('button'); b.className = 'k'; b.textContent = k.glyph; b.setAttribute('aria-label', k.name);
+    b.style.gridColumn = k.at[0] + 1; b.style.gridRow = k.at[1] + 1; dp.appendChild(b); els[k.key] = b; }
+  if (spec.hub){ const h = document.createElement('div'); h.className = 'hub'; h.innerHTML = '<i></i>'; h.style.gridColumn = spec.hub[0] + 1; h.style.gridRow = spec.hub[1] + 1; dp.appendChild(h); }
+  const go = document.createElement('button'); go.className = 'go'; go.innerHTML = `${spec.action}<small>SPACE</small>`; go.setAttribute('aria-label', spec.action);
+  els[' '] = go;
+  pad.append(dp, go); host.appendChild(pad);
+  const send = (type, key) => dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }));
+  for (const [key, el] of Object.entries(els)){
+    let held = null;
+    el.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); if (held != null) return; held = e.pointerId;
+      try { el.setPointerCapture(e.pointerId); } catch (_) {} send('keydown', key); });
+    const release = e => { if (held == null || (e && e.pointerId !== held)) return; held = null; send('keyup', key); };
+    el.addEventListener('pointerup', release); el.addEventListener('pointercancel', release); el.addEventListener('lostpointercapture', release);
+    el.addEventListener('click', e => e.preventDefault());
+    el.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); send('keydown', key); setTimeout(() => send('keyup', key), 120); } });
+  }
+  // space belongs to the game: a button that still has the focus from a click must not be pressed by it too
+  addEventListener('keydown', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  addEventListener('keyup', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  // light the keys for real key presses too (and for the pad's own, which arrive the same way)
+  addEventListener('keydown', e => { const el = els[e.key]; if (el) el.classList.add('down'); });
+  addEventListener('keyup', e => { const el = els[e.key]; if (el) el.classList.remove('down'); });
+  addEventListener('blur', () => Object.values(els).forEach(el => el.classList.remove('down')));
+}
+
+</script>
+<script>
+/* Drone Lab shared data: the build steps, what every part does, and the drones themselves.
+   Used by the hub (drone-lab.html), the assembly figure (drone-assembly.html) and the simulator (drone-flight.html).
+   Geometry is in millimetres (x = nose direction, y = left, z = up); flight numbers are SI units. */
+
+// Real build order. Props go on LAST on every real build (after the motors have been tested without them) and the
+// battery is only plugged in to fly, so both come after the shell.
+const DL_STEPS = [
+  { k:'frame',   name:'Frame',            t:'The frame is the skeleton: carbon-fibre plates that everything bolts to. It has to be stiff, because any flex shows up as vibration in the gyro.' },
+  { k:'arms',    name:'Arms',             t:'The arms put the motors far enough apart that the props never touch. Longer arms carry bigger props; on most FPV frames a crashed arm unbolts and is swapped in minutes.' },
+  { k:'motors',  name:'Motors',           t:'Brushless motors: a ring of magnets in the spinning bell, coils on the fixed stator. "2207" means a 22 mm wide, 7 mm tall stator. Diagonal motors spin the same way.' },
+  { k:'esc',     name:'ESCs',             t:'Electronic speed controllers turn battery DC into three switched phases that spin each motor, thousands of times a second, at whatever speed the flight controller asks for.' },
+  { k:'fc',      name:'Flight controller',t:'The brain: a gyro measures rotation thousands of times a second, and the PID loop corrects the motors to make the drone rotate exactly as fast as your sticks ask.' },
+  { k:'camera',  name:'Camera & radios',  t:'The camera feeds the video transmitter (VTX) that sends live video to your goggles; the receiver (RX) picks up your radio sticks. Two separate radio links.' },
+  { k:'wiring',  name:'Wiring',           t:'Three motor wires per motor to the ESC, a thick battery lead with a capacitor to soak up voltage spikes, and thin signal wires between the boards.' },
+  { k:'shell',   name:'Top plate / shell',t:'The top plate or shell closes the frame, stiffens it and protects the electronics. It also carries the battery strap or slot.' },
+  { k:'battery', name:'Battery',          t:'A lithium battery: each cell is 4.2 V full and should not go below about 3.5 V under load. It goes on only to fly; weight sits near the centre so the drone balances.' },
+  { k:'props',   name:'Propellers',       t:'Props go on last, always. Half spin clockwise and half counter-clockwise so their twisting forces cancel. Red arrow = clockwise from above, blue = counter-clockwise.' },
+];
+
+// what each kind of part does (shown when a part is clicked, and as its tooltip)
+const DL_PARTS = {
+  plate:    ['FRAME PLATE', 'Carbon-fibre plate. Carbon is light and very stiff; the stack and arms bolt to it.'],
+  arm:      ['ARM', 'Holds a motor out from the centre. The distance between diagonal motors is the "wheelbase".'],
+  duct:     ['DUCT', 'A ring around the prop. It protects people and things and adds a little thrust at low speed, at the cost of drag at high speed.'],
+  standoff: ['STANDOFF', 'Aluminium posts that hold the top plate above the bottom plate and make a box around the electronics.'],
+  foot:     ['FOOT', 'Rubber or legs the drone stands on, so the bottom plate and camera never hit the ground first.'],
+  gear:     ['LANDING GEAR', 'Tall legs keep the big camera clear of the ground on take-off and landing.'],
+  motor:    ['MOTOR', 'Brushless outrunner. Its speed (KV x volts) and the prop size set how much thrust it makes. It spins whichever way the ESC drives it.'],
+  esc:      ['ESC', 'Electronic speed controller: switches battery power through the motor coils in sequence. Changing two motor wires (or a setting) reverses the motor.'],
+  fc:       ['FLIGHT CONTROLLER', 'Reads the gyro about 8000 times a second and runs the PID loop: it works out how hard each motor must push to match the rotation your sticks ask for.'],
+  gyro:     ['GYRO (IMU)', 'Measures rotation speed on three axes. In acro mode this is the only sensor the drone uses: it holds whatever angle you leave it at.'],
+  rx:       ['RECEIVER', 'Picks up your radio transmitter. Throttle, yaw, pitch and roll arrive as numbers the flight controller turns into rotation rates.'],
+  vtx:      ['VIDEO TX', 'Sends the camera picture to your goggles in real time (5.8 GHz). Never power it without an antenna fitted.'],
+  antenna:  ['ANTENNA', 'Antennas stick out the back, away from the carbon frame, which blocks radio signals.'],
+  camera:   ['FPV CAMERA', 'Wide-angle, very low-latency camera you fly through. It is tilted up because the drone leans forward to fly forward.'],
+  action:   ['ACTION CAMERA', 'Records the smooth high-quality footage; the FPV camera is only for flying.'],
+  gimbal:   ['GIMBAL', 'Three small motors hold the camera level whatever the drone does, so the footage stays smooth while the drone tilts.'],
+  gps:      ['GPS', 'Lets the drone know where it is, so it can hold position, fly home and land by itself.'],
+  shell:    ['SHELL', 'Moulded body: keeps rain and dust off the electronics and stiffens the frame.'],
+  canopy:   ['CANOPY', 'Soft TPU cover over the electronics: bends in a crash instead of breaking.'],
+  battery:  ['BATTERY', 'LiPo or Li-ion pack. Cells in series (S) raise the voltage; capacity (mAh) sets flight time. Voltage sags under hard throttle.'],
+  strap:    ['BATTERY STRAP', 'Holds the battery. A loose battery shifts the balance mid-flight.'],
+  xt60:     ['BATTERY LEAD', 'Thick silicone wires and an XT60/XT90 connector carry up to 150 A.'],
+  cap:      ['CAPACITOR', 'Soaks up voltage spikes from the motors that could reset or damage the electronics.'],
+  wire:     ['MOTOR WIRES', 'Three phase wires per motor. Any order works; swapping two reverses the motor.'],
+  pdb:      ['POWER BOARD', 'Power distribution board: splits battery power to every ESC.'],
+  prop:     ['PROPELLER', 'Twisted blades push air down. A CW prop and a CCW prop are mirror images: fit the wrong one and it pushes air up.'],
+  wing:     ['WING', 'Generates lift from forward speed, like a plane, so it flies far on little power.'],
+};
+
+/* Motor layouts: angle from the nose (deg, + toward the left), and spin seen from above (1 = CW, -1 = CCW).
+   Quads use Betaflight's default "props in": front-left and rear-right CW, front-right and rear-left CCW. */
+const dlRing = (n, a0) => Array.from({ length:n }, (_, i) => ({ a: a0 + 360*i/n, dir: i % 2 ? -1 : 1 }));
+const DL_QUAD = dlRing(4, 45);
+
+const DL_DRONES = [
+  { id:'freestyle', name:'5-inch Freestyle', cls:'FPV quad', pal:'tomato', ready:true,
+    blurb:'The do-everything FPV quad: flips, rolls and dives, carrying an action camera.',
+    facts:[['Wheelbase','225 mm'], ['Props','5.1 in, 3 blades'], ['Battery','6S 1300 mAh'], ['Weight','about 650 g']],
+    geo:{ style:'xplate', motors:DL_QUAD, arm:112, armW:14, propR:65, blades:3, motorR:14, motorH:18, plateL:104, plateW:44,
+          standH:28, stack:30.5, action:true, batt:[72, 35, 38], cells:'6S', propCol:'#ef6a4c' },
+    wt:[38, 36, 132, 14, 8, 28, 18, 30, 210, 20],
+    fly:{ mass:.65, twr:9, tau:.035, kd:.055, rate:[200, 670, .54], yawRate:[200, 600, .5], modes:['acro', 'angle'], crashV:8,
+          uptilt:30, cells:6, mAh:1300, Imax:150, kQ:.016, cam:'fpv' } },
+
+  { id:'cinewhoop', name:'3-inch Cinewhoop', cls:'Ducted FPV', pal:'mint', ready:true,
+    blurb:'Ducted props make it safe to fly close to people and indoors for smooth cinematic shots.',
+    facts:[['Wheelbase','140 mm'], ['Props','3 in in ducts'], ['Battery','4S 850 mAh'], ['Weight','about 370 g']],
+    geo:{ style:'duct', motors:DL_QUAD, arm:70, armW:10, propR:38, blades:3, motorR:9, motorH:12, ductR:41, ductH:24,
+          stack:20, batt:[60, 31, 26], cells:'4S', propCol:'#8fd0f0' },
+    wt:[45, 40, 64, 7, 6, 34, 10, 16, 105, 8],
+    fly:{ mass:.37, twr:5, tau:.045, kd:.11, rate:[150, 480, .4], yawRate:[150, 400, .4], modes:['acro', 'angle'], crashV:5.5,
+          uptilt:12, cells:4, mAh:850, Imax:60, kQ:.014, cam:'fpv', ducts:true } },
+
+  { id:'mini', name:'Camera Drone (Mini)', cls:'GPS camera drone', pal:'cobalt', ready:true,
+    blurb:'A folding sub-250 g camera drone. GPS holds it still when you let go of the sticks.',
+    facts:[['Diagonal','247 mm'], ['Props','4 in, 2 blades'], ['Battery','2S 2450 mAh'], ['Weight','249 g']],
+    geo:{ style:'shell', motors:DL_QUAD, propR:50, blades:2, motorR:8, cells:'2S', propCol:'#3d3935' },
+    wt:[48, 22, 28, 6, 12, 32, 4, 20, 77, 4],
+    fly:{ mass:.249, twr:2.4, tau:.05, kd:.035, rate:[100, 200, .2], yawRate:[60, 120, .2], modes:['gps', 'sport', 'cine'], crashV:3.2,
+          uptilt:-10, cells:2, mAh:2450, Imax:16, kQ:.012, cam:'gimbal' } },
+
+  { id:'octo', name:'Heavy-lift Octocopter', cls:'Cinema / cargo', pal:'mustard', ready:true,
+    blurb:'Eight big motors lift a cinema camera. Slow to react, very stable, and it can lose a motor and still land.',
+    facts:[['Diagonal','1240 mm'], ['Props','18 in, 2 blades'], ['Battery','2 x 6S 16000 mAh'], ['Weight','about 22 kg']],
+    geo:{ style:'round', motors:dlRing(8, 22.5), arm:620, propR:228, blades:2, motorR:44, gearH:300, plateR:165, gimbal:'cine',
+          cells:'2x 6S', propCol:'#3d3935' },
+    wt:[1900, 1600, 2800, 640, 260, 4200, 420, 380, 9200, 560],
+    fly:{ mass:22, twr:1.9, tau:.18, kd:.47, rate:[60, 120, .2], yawRate:[40, 80, .2], modes:['gps', 'angle'], crashV:2.5,
+          uptilt:-15, cells:6, mAh:32000, Imax:420, kQ:.02, cam:'gimbal' } },
+
+  { id:'race', name:'5-inch Racer', cls:'Race quad', pal:'blush', ready:true,
+    blurb:'Stretched-X, low and light: built for straight-line speed through gates rather than tricks.',
+    facts:[['Wheelbase','215 mm'], ['Props','5 in, 3 blades'], ['Battery','6S 1100 mAh'], ['Weight','about 520 g']],
+    geo:{ style:'xplate', motors:[{a:35,dir:1},{a:145,dir:-1},{a:215,dir:1},{a:325,dir:-1}], arm:108, armW:13, propR:63, blades:3,
+          motorR:14, motorH:17, plateL:96, plateW:34, standH:22, stack:30.5, batt:[70, 34, 34], cells:'6S', propCol:'#f3a6bb' },
+    wt:[30, 30, 128, 14, 8, 22, 16, 22, 185, 18],
+    fly:{ mass:.52, twr:11, tau:.03, kd:.045, rate:[230, 800, .5], yawRate:[200, 600, .5], modes:['acro', 'angle'], crashV:7,
+          uptilt:40, cells:6, mAh:1100, Imax:160, kQ:.016, cam:'fpv' } },
+
+  { id:'longrange', name:'7-inch Long Range', cls:'Long-range FPV', pal:'mint', ready:true,
+    blurb:'Big slow props and a Li-ion pack: 20+ minute flights and kilometres of range, with GPS rescue.',
+    facts:[['Wheelbase','315 mm'], ['Props','7 in, 2 blades'], ['Battery','6S 4000 mAh Li-ion'], ['Weight','about 1050 g']],
+    geo:{ style:'xplate', motors:DL_QUAD, arm:158, armW:16, propR:89, blades:2, motorR:17, motorH:20, plateL:120, plateW:48,
+          standH:30, stack:30.5, gps:true, batt:[72, 44, 42], cells:'6S Li-ion', propCol:'#93d3b0' },
+    wt:[60, 64, 200, 16, 9, 38, 22, 40, 560, 24],
+    fly:{ mass:1.05, twr:4.5, tau:.06, kd:.05, rate:[160, 500, .4], yawRate:[150, 400, .4], modes:['acro', 'angle'], crashV:7,
+          uptilt:20, cells:6, mAh:4000, Imax:70, kQ:.017, cam:'fpv' } },
+
+  { id:'whoop', name:'Racing Tiny Whoop', cls:'65 mm indoor', pal:'blush', ready:true,
+    blurb:'A 28 g palm-sized whoop. Bounces off walls, flies in your living room, teaches acro cheaply.',
+    facts:[['Wheelbase','65 mm'], ['Props','31 mm, 4 blades'], ['Battery','1S 300 mAh'], ['Weight','28 g']],
+    geo:{ style:'duct', whoop:true, motors:DL_QUAD, arm:23, armW:4, propR:15.5, blades:4, motorR:3.6, motorH:8, ductR:17, ductH:12,
+          stack:0, batt:[34, 12, 7], cells:'1S', propCol:'#f4b829' },
+    wt:[4.2, 0, 7.6, 0, 3.4, 3.2, .6, 1.2, 7.2, .8],
+    fly:{ mass:.028, twr:3.4, tau:.02, kd:.006, rate:[180, 720, .5], yawRate:[180, 600, .5], modes:['acro', 'angle'], crashV:9,
+          uptilt:15, cells:1, mAh:300, Imax:7, kQ:.012, cam:'fpv', ducts:true } },
+
+  { id:'hexa', name:'Mapping Hexacopter', cls:'Survey / inspection', pal:'cobalt', ready:true,
+    blurb:'Six motors and GPS: flies survey grids by itself, carrying a downward mapping camera.',
+    facts:[['Diagonal','960 mm'], ['Props','15 in, 2 blades'], ['Battery','6S 10000 mAh'], ['Weight','about 7 kg']],
+    geo:{ style:'round', motors:dlRing(6, 30), arm:480, propR:190, blades:2, motorR:34, gearH:230, plateR:130, gimbal:'map',
+          cells:'6S', propCol:'#3d3935' },
+    wt:[900, 600, 960, 300, 180, 650, 220, 260, 2600, 260],
+    fly:{ mass:7, twr:2.1, tau:.12, kd:.2, rate:[70, 140, .2], yawRate:[45, 90, .2], modes:['gps', 'angle'], crashV:2.8,
+          uptilt:-30, cells:6, mAh:10000, Imax:180, kQ:.019, cam:'gimbal' } },
+
+  { id:'wing', name:'FPV Flying Wing', cls:'Fixed wing', pal:'mustard', ready:false,
+    blurb:'No tail, one pusher prop and two elevons. Flies an hour on a small battery, but needs forward speed to stay up.',
+    facts:[['Span','1100 mm'], ['Prop','7 in pusher'], ['Battery','4S 2200 mAh'], ['Weight','about 900 g']] },
+
+  { id:'vtol', name:'Quadplane VTOL', cls:'Hybrid VTOL', pal:'tomato', ready:false,
+    blurb:'Takes off straight up on four lift motors, then a pusher prop and wing take over for efficient cruise.',
+    facts:[['Span','1600 mm'], ['Lift','4 x 12 in'], ['Battery','6S 8000 mAh'], ['Weight','about 4.5 kg']] },
+];
+const dlDrone = id => DL_DRONES.find(d => d.id === id) || DL_DRONES[0];
+
+</script>
+<script>
+/* Drone Lab: draws any multirotor in DL_DRONES with the Colorfigures engine (core.js), part by part.
+   Everything goes through ddXF(), so the whole drone can tilt and lift for the "how it flies" demo, and every part
+   is a byDepth item with its own box, so it sorts correctly from every side.
+   x = nose, y = left, z = up, millimetres; the drone's centre sits at DD_O. */
+
+let DD_O = [0, 0, 0];                       // world position of the drone centre (z = the surface it stands on)
+let DD_T = { r:0, p:0, y:0, zc:0, lift:0 };  // demo attitude: roll (+ right side down), pitch (+ nose down), yaw (+ left), about height zc
+let DD_DZ = [0, 0, 0];                      // extra offset while a part is being placed (it drops in)
+const DD_CW = '#e2483d', DD_CCW = '#3f78d8';
+const DD_CARBON = { l:'#5a5651', m:'#3f3c38', d:'#2a2825' };
+const DD_ALU = { l:'#f0d27a', m:'#d9b04a', d:'#9c7a26' };
+const DD_PCB_E = matOf('#3f8f5a'), DD_PCB_F = matOf('#4b4f9e'), DD_CHIP = matOf('#2b2826');
+const DD_COPPER = matOf('#e0a35a'), DD_RUBBER = matOf('#3a3632'), DD_SILVER = { l:'#eef0f0', m:'#c6ccce', d:'#8f989b' };
+const DD_GREY = matOf('#d9d6cc'), DD_WHITE = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
+
+function ddXF(p){
+  let x = p[0], y = p[1], z = p[2] - DD_T.zc;
+  const t = DD_T;
+  if (t.r){ const c = Math.cos(t.r), s = Math.sin(t.r); [y, z] = [y*c - z*s, y*s + z*c]; }
+  if (t.p){ const c = Math.cos(t.p), s = Math.sin(t.p); [x, z] = [x*c + z*s, -x*s + z*c]; }
+  if (t.y){ const c = Math.cos(t.y), s = Math.sin(t.y); [x, y] = [x*c - y*s, x*s + y*c]; }
+  return [x + DD_O[0] + DD_DZ[0], y + DD_O[1] + DD_DZ[1], z + DD_T.zc + DD_T.lift + DD_O[2] + DD_DZ[2]];
+}
+const ddBB = pts => [[0,1,2].map(i => Math.min(...pts.map(p => p[i]))), [0,1,2].map(i => Math.max(...pts.map(p => p[i])))];
+// face normal by Newell's method (robust for rounded outlines whose first points are nearly in line)
+const ddNormal = q => { let nx = 0, ny = 0, nz = 0;
+  for (let i = 0; i < q.length; i++){ const a = q[i], b = q[(i+1) % q.length]; nx += (a[1]-b[1])*(a[2]+b[2]); ny += (a[2]-b[2])*(a[0]+b[0]); nz += (a[0]-b[0])*(a[1]+b[1]); }
+  return norm([nx, ny, nz]); };
+
+/* ---------- solids (local coords in, {svg, pts} out, pts in world coords) ---------- */
+function ddSolid(faces, m, w = .8, sil = 1.2){
+  const F = faces.map(q => q.map(ddXF)), all = F.flat(), c = avg(all);
+  let s = '';
+  for (const q of F){ let n = ddNormal(q); if (dot(n, sub(avg(q), c)) < 0) n = n.map(v => -v); if (vis(n)) s += shape(q, toneI(n, m), w); }
+  return { svg: s + (sil ? hullInk(all, sil) : ''), pts: all };
+}
+function ddPrism(poly, z0, z1, m, w = .8, sil = 1.2){
+  const n = poly.length, faces = [poly.map(([x, y]) => [x, y, z0]), poly.map(([x, y]) => [x, y, z1])];
+  for (let i = 0; i < n; i++){ const a = poly[i], b = poly[(i+1) % n]; faces.push([[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]]); }
+  return ddSolid(faces, m, w, sil);
+}
+const ddBox = (x0, y0, z0, x1, y1, z1, m, w = .8, sil = 1.1) => ddPrism([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], z0, z1, m, w, sil);
+function ddRod(a, b, r, m, w = .9, r1 = r, n = 14){
+  const A = ddXF(a), B = ddXF(b), e = Math.max(r, r1);
+  return { svg: rod(A, B, r, m, toneI, w, r1, n), pts: [A, B, ...[[e,0,0],[-e,0,0],[0,e,0],[0,-e,0],[0,0,e],[0,0,-e]].flatMap(d => [A.map((v, i) => v + d[i]), B.map((v, i) => v + d[i])])] };
+}
+const ddCyl = (x, y, z0, z1, r, m, w = .9, n = 16) => ddRod([x, y, z0], [x, y, z1], r, m, w, r, n);
+// a body swept along x between two (y, z) outlines (rounded shells, noses); ends capped
+function ddSweep(prof0, x0, prof1, x1, m, w = 1.4){
+  const A = prof0.map(([y, z]) => ddXF([x0, y, z])), B = prof1.map(([y, z]) => ddXF([x1, y, z]));
+  let s = loft(A, B, nr => tone(nr, m));
+  const ax = norm(sub(avg(B), avg(A)));
+  for (const [R, d] of [[A, ax.map(v => -v)], [B, ax]]) if (vis(d)) s += shape(R, tone(d, m), 1);
+  return { svg: s + hullInk([...A, ...B], w), pts: [...A, ...B] };
+}
+// a dome (canopy) on a ring: radius r, height h, centred (x, y) at z0
+function ddDome(x, y, z0, r, h, m){
+  const rings = [0, .35, .65, .88, 1].map(t => { const a = t*Math.PI/2; return ellUV(x, y, r*Math.cos(a) + .01, r*Math.cos(a) + .01, 20).map(([u, v]) => ddXF([u, v, z0 + h*Math.sin(a)])); });
+  let s = ''; for (let i = 0; i < rings.length - 1; i++) s += loft(rings[i], rings[i+1], nr => tone(nr, m));
+  return { svg: s + hullInk(rings.flat(), 1.6), pts: rings.flat() };
+}
+// a wire: an inked coloured line through local points
+function ddWire(pts, col, w = .9){
+  const W = pts.map(ddXF), d = pd(W, false);
+  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w*2 + .9)}" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w*2)}" stroke-linejoin="round" stroke-linecap="round"/>`, pts: W };
+}
+const dd2Rect = (x0, y0, x1, y1, r = 0) => r > 0 ? rrUV(x0, y0, x1, y1, r, 4) : rectUV(x0, y0, x1, y1);
+// a rectangle of length len, width w, centred at (cx, cy), turned to angle a (deg)
+const dd2Rot = (cx, cy, a, len, w) => { const c = Math.cos(a*Math.PI/180), s = Math.sin(a*Math.PI/180);
+  return [[-len/2, -w/2], [len/2, -w/2], [len/2, w/2], [-len/2, w/2]].map(([u, v]) => [cx + u*c - v*s, cy + u*s + v*c]); };
+// an arm: from radius r0 to the motor at r1 along angle a, with a round motor pad
+const dd2Arm = (a, r0, r1, w, pad) => { const c = Math.cos(a*Math.PI/180), s = Math.sin(a*Math.PI/180), mx = r1*c, my = r1*s;
+  return hull([[r0*c + w/2*s, r0*s - w/2*c], [r0*c - w/2*s, r0*s + w/2*c], ...ellUV(mx, my, pad, pad, 16)]); };
+
+/* ---------- propeller, spin arrow, thrust arrow ---------- */
+function ddProp(mx, my, zP, R, blades, dir, col, ang, speed){
+  const M = matOf(col), hubR = Math.max(R*.09, 2.2);
+  let s = '';
+  const pts = [];
+  // spinning fast: a pale disc with faint blades; slow or still: solid twisted blades
+  const blur = Math.min(1, speed*1.6);
+  if (blur > .05){ const ring = ellUV(mx, my, R, R, 28).map(([u, v]) => ddXF([u, v, zP + 1.2]));
+    s += fill(pd(ring), col, `opacity="${f(.28*blur)}"`) + `<path d="${pd(ring)}" fill="none" stroke="${INK}" stroke-width=".6" opacity="${f(.5*blur)}" stroke-dasharray="3 3"/>`; }
+  for (let b = 0; b < blades; b++){
+    const th = ang*Math.PI/180*-dir + b*2*Math.PI/blades, r0 = hubR*.8;
+    const wr = R*.17, wt = R*.08, lead = -dir;   // leading edge moves the way the prop turns, and sits higher (pitch)
+    const P2 = (r, w, z) => { const a = th + lead*w/r; return [mx + r*Math.cos(a), my + r*Math.sin(a), z]; };
+    const q = [P2(r0, wr*.5, zP + 2.4), P2(R*.55, wr, zP + 2.2), P2(R, wt, zP + 1.6), P2(R, -wt*.6, zP + .9), P2(R*.55, -wr*.6, zP + .6), P2(r0, -wr*.4, zP + .5)].map(ddXF);
+    let n = ddNormal(q); if (!vis(n)) n = n.map(v => -v);
+    s += `<g opacity="${f(1 - .75*blur)}">` + shape(q, toneI(n, M), .8) + '</g>'; pts.push(...q);
+  }
+  const hub = ddCyl(mx, my, zP, zP + 3.2, hubR, M, .8, 12);
+  return { svg: s + hub.svg, pts: [...pts, ...hub.pts, ...ellUV(mx, my, R, R, 8).map(([u, v]) => ddXF([u, v, zP + 1]))] };
+}
+function ddSpinArrow(mx, my, z, R, dir){
+  const col = dir > 0 ? DD_CW : DD_CCW, a0 = dir > 0 ? 160 : 20, sweep = -dir*130, r = R*.62, n = 14;
+  const arc = Array.from({ length:n+1 }, (_, i) => { const a = (a0 + sweep*i/n)*Math.PI/180; return [mx + r*Math.cos(a), my + r*Math.sin(a), z]; });
+  const ae = (a0 + sweep)*Math.PI/180, tdir = [-Math.sin(ae)*-dir, Math.cos(ae)*-dir], hl = R*.2, hw = R*.11;
+  const end = arc[n], tip = [end[0] + tdir[0]*hl, end[1] + tdir[1]*hl, z], rad = [Math.cos(ae), Math.sin(ae)];
+  const head = [tip, [end[0] + rad[0]*hw, end[1] + rad[1]*hw, z], [end[0] - rad[0]*hw, end[1] - rad[1]*hw, z]].map(ddXF);
+  const W = arc.map(ddXF), d = pd(W, false);
+  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>` + shape(head, col, 1.1), pts: [...W, ...head] };
+}
+function ddThrust(mx, my, z, R, k){
+  const len = R*1.15*k, r = Math.max(1.4, R*.045);
+  const shaft = ddRod([mx, my, z], [mx, my, z + len], r, matOf('#f4b829'), .9), head = ddRod([mx, my, z + len], [mx, my, z + len + r*5], r*2.6, matOf('#f4b829'), 1, 0);
+  return { svg: shaft.svg + head.svg, pts: [...shaft.pts, ...head.pts] };
+}
+
+/* ---------- the model: every part as a byDepth item tagged with its build step and kind ---------- */
+const DD_STEP_I = Object.fromEntries(DL_STEPS.map((s, i) => [s.k, i]));
+/* opt: { show(i) -> 0 (hidden) | 0..1 (placing) | 1, drop: dz for a part being placed, spin, speeds[], thrust[], arrows, sel }
+   returns { items, labels:{key: point}, shadow: points, top } */
+function ddModel(D, opt){
+  const g = D.geo, items = [], labels = {}, shadow = [];
+  let cur = null;
+  const step = k => { const i = DD_STEP_I[k], v = opt.show(i); cur = v > 0 ? { i, v } : null;
+    const k2 = v > 0 && v < 1 ? 1 - ease(v) : 0, from = opt.from && opt.from[k] || [0, 0, 1];
+    DD_DZ = from.map(c => c*k2*opt.drop); return !!cur; };
+  const add = (key, sol, flags = {}) => { if (!cur) return; const box3 = ddBB(sol.pts);
+    let svg = sol.svg; if (cur.v < 1) svg = `<g opacity="${f(Math.min(1, cur.v*2))}">${svg}</g>`;
+    const nm = DL_PARTS[key] || [key.toUpperCase(), ''];
+    svg = `<g data-act="part" data-k="${key}" class="pt${opt.sel === key ? ' selp' : ''}"><title>${nm[0]}: ${nm[1]}</title>${svg}</g>`;
+    items.push({ box: box3, svg, key, step: cur.i, cover: !!flags.cover, inner: !!flags.inner });
+    if (!labels[key] && cur.v >= 1) labels[key] = flags.at ? ddXF(flags.at) : boxMid(box3); };
+  const motors = g.motors.map((m, i) => ({ ...m, ...(g.pos ? { x: g.pos[i][0], y: g.pos[i][1] } : { x: g.arm*Math.cos(m.a*Math.PI/180), y: g.arm*Math.sin(m.a*Math.PI/180) }) }));
+  const st = { motors, zP: 0, zMotor: 0, top: 0 };
+  const B = { xplate: ddXPlate, duct: ddDuct, shell: ddShell, round: ddRound }[g.style];
+  B(D, g, st, step, add, shadow);
+  // motors, props, arrows and thrust are the same on every drone (each style sets st.zMotor, st.zP and motor sizes)
+  const mm = matOf(D.geo.motorCol || '#c9cfd2'), bell = PALS[D.pal] ? PALS[D.pal] : DD_SILVER;
+  if (step('motors')) motors.forEach((m, i) => {
+    const z0 = m.z0 != null ? m.z0 : st.zMotor, R = g.motorR, h = g.motorH || R*1.2;
+    const base = ddCyl(m.x, m.y, z0, z0 + R*.22, R*.86, DD_CHIP, .8, 16), bel = ddCyl(m.x, m.y, z0 + R*.22, z0 + R*.22 + h, R, bell, 1, 18);
+    const shaft = ddCyl(m.x, m.y, z0 + R*.22 + h, (m.zP != null ? m.zP : st.zP) + 3, Math.max(1, R*.13), DD_SILVER, .7, 10);
+    add('motor', { svg: base.svg + bel.svg + shaft.svg, pts: [...base.pts, ...bel.pts, ...shaft.pts] }, { at: [m.x, m.y, z0 + h] });
+    shadow.push(ddXF([m.x, m.y, z0 + h]));
+  });
+  if (opt.arrows && opt.show(DD_STEP_I.motors) >= 1) motors.forEach(m => {
+    const zP = m.zP != null ? m.zP : st.zP; DD_DZ = [0, 0, 0];
+    const a = ddSpinArrow(m.x, m.y, zP + g.propR*.14 + 4, g.propR, m.dir);
+    items.push({ box: ddBB(a.pts), svg: `<g class="spin">${a.svg}</g>`, key: 'arrow', step: -1 }); });
+  if (step('props')) motors.forEach((m, i) => {
+    const zP = m.zP != null ? m.zP : st.zP, sp = (opt.speeds && opt.speeds[i]) || 0;
+    add('prop', ddProp(m.x, m.y, zP, g.propR, g.blades, m.dir, g.propCol, (opt.spin || 0)*(.6 + .4*sp) + i*37, sp), { at: [m.x + g.propR*.7, m.y, zP + 2] });
+  });
+  if (opt.thrust) motors.forEach((m, i) => { DD_DZ = [0, 0, 0];
+    const zP = m.zP != null ? m.zP : st.zP, t = ddThrust(m.x, m.y, zP + 5, g.propR, opt.thrust[i]);
+    items.push({ box: ddBB(t.pts), svg: t.svg, key: 'thrust', step: -1 }); });
+  DD_DZ = [0, 0, 0];
+  return { items, labels, shadow, top: st.top, motors, zP: st.zP };
+}
+
+/* ---------- style: carbon X frame (5" freestyle, racer, 7" long range) ---------- */
+function ddXPlate(D, g, st, step, add, shadow){
+  const L = g.plateL, W = g.plateW, pal = PALS[D.pal];
+  const zB = 2.5, zA = 5, zA1 = 10, zC = 12, T0 = zC + g.standH, R = g.motorR;
+  st.zMotor = zA1; st.zP = zA1 + R*.22 + g.motorH + 1.2; st.top = T0;
+  const corners = [[L/2 - 9, W/2 - 6], [L/2 - 9, -W/2 + 6], [-L/2 + 9, W/2 - 6], [-L/2 + 9, -W/2 + 6]];
+  if (step('frame')){
+    add('plate', ddPrism(dd2Rect(-L/2, -W/2, L/2, W/2, 8), zB, zA, DD_CARBON, .9, 1.4), { at: [-L/2 + 6, W/2 - 4, zA] });
+    for (const [x, y] of corners) add('foot', ddCyl(x, y, 0, zB, 4, DD_RUBBER, .7, 10));
+    // camera side plates (the cage the FPV camera sits in)
+    for (const y of [-12.5, 11]) add('plate', ddBox(L/2 - 24, y, zC, L/2 + 1, y + 1.5, T0, DD_CARBON, .8, 1));
+  }
+  if (step('arms')){
+    g.motors.forEach(m => add('arm', ddPrism(dd2Arm(m.a, 18, g.arm, g.armW, R*.95), zA, zA1, DD_CARBON, .9, 1.3), { at: [g.arm*.6*Math.cos(m.a*Math.PI/180), g.arm*.6*Math.sin(m.a*Math.PI/180), zA1] }));
+    add('plate', ddPrism(dd2Rect(-L/2 + 4, -W/2 + 2, L/2 - 22, W/2 - 2, 6), zA1, zC, DD_CARBON, .8, 1.1));
+    for (const m of g.motors) shadow.push(ddXF([g.arm*Math.cos(m.a*Math.PI/180), g.arm*Math.sin(m.a*Math.PI/180), zA1]));
+  }
+  const s2 = g.stack/2, bw = s2 + 3, zE = zC + 4, zF = zE + 10;
+  if (step('esc')){
+    for (const sx of [-s2, s2]) for (const sy of [-s2, s2]) add('standoff', ddCyl(sx - 4, sy, zC, zF + 2, 1.5, DD_GREY, .6, 8));
+    const esc = ddBox(-bw - 4, -bw, zE, bw - 4, bw, zE + 1.6, DD_PCB_E, .8, 1);
+    let svg = esc.svg; for (let i = 0; i < 4; i++) for (const sy of [-9, 5]) svg += ddBox(-14 - 4 + i*7, sy, zE + 1.6, -10 - 4 + i*7, sy + 4, zE + 3, DD_CHIP, .5, .6).svg;
+    add('esc', { svg, pts: esc.pts }, { inner: true, at: [bw - 4, bw, zE + 1] });
+  }
+  if (step('fc')){
+    const fc = ddBox(-bw - 4, -bw, zF, bw - 4, bw, zF + 1.6, DD_PCB_F, .8, 1);
+    const mcu = ddBox(-9, -6, zF + 1.6, 3, 6, zF + 3, DD_CHIP, .5, .6), usb = ddBox(-8, bw - 1, zF + 1.6, 0, bw + 1.5, zF + 4.6, DD_SILVER, .5, .6);
+    add('fc', { svg: fc.svg + mcu.svg + usb.svg, pts: fc.pts }, { inner: true, at: [-bw - 4, -bw, zF + 1] });
+    add('gyro', ddBox(6, -bw + 4, zF + 1.6, 10, -bw + 8, zF + 2.8, matOf('#d8d8d8'), .5, .6), { inner: true });
+  }
+  const zV = zF + 3.6, rear = -L/2;
+  if (step('camera')){
+    const cam = ddBox(L/2 - 21, -9.5, zC + 5, L/2 - 2, 9.5, zC + 24, DD_CHIP, .8, 1.1);
+    const tilt = 25*Math.PI/180, lc = [L/2 - 2, 0, zC + 14.5], lens = ddRod(lc, [lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], 7, DD_CHIP, .9, 6.4);
+    const glass = ddRod([lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], [lc[0] + 9.6*Math.cos(tilt), 0, lc[2] + 9.6*Math.sin(tilt)], 4.6, matOf('#4b6b9a'), .6);
+    add('camera', { svg: cam.svg + lens.svg + glass.svg, pts: [...cam.pts, ...lens.pts] });
+    add('vtx', ddBox(-14 - 4, -13, zV, 14 - 4, 13, zV + 4, matOf('#3a3f45'), .8, 1), { inner: true });
+    add('rx', ddBox(rear + 6, -5, zC, rear + 18, 5, zC + 2, DD_PCB_E, .6, .8), { inner: true });
+    for (const s of [-1, 1]) add('antenna', ddRod([rear + 6, 3*s, zC + 1], [rear - 22, 16*s, zC + 10], 1, DD_WHITE, .7), { at: [rear - 20, 15*s, zC + 9] });
+    add('antenna', ddRod([rear - 2, 0, zV + 2], [rear - 20, 0, T0 + 20], 2.6, DD_CHIP, .8), { at: [rear - 18, 0, T0 + 18] });
+  }
+  if (step('wiring')){
+    const cols = ['#e2483d', '#f4b829', '#3f78d8'];
+    g.motors.forEach(m => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180);
+      cols.forEach((col, k) => { const o = (k - 1)*2.4, ox = -s*o, oy = c*o, rr = g.arm - R - 2;
+        add('wire', ddWire([[rr*c + ox, rr*s + oy, zA1 + .8], [(rr*.5 + 12)*c + ox, (rr*.5 + 12)*s + oy, zA1 + .8]], col, .7), { inner: true });
+        add('wire', ddWire([[(rr*.5 + 12)*c + ox, (rr*.5 + 12)*s + oy, zA1 + .8], [24*c + ox, 24*s + oy, zC + .8], [(bw - 2)*c - 4 + ox, (bw - 2)*s + oy, zE + 1.8]], col, .7), { inner: true }); }); });
+    for (const [s, col] of [[3, '#e2483d'], [-3, '#3a3632']]) add('xt60', ddWire([[-bw - 2, s, zE + 1.8], [rear + 2, s, zE + 1], [rear - 6, s, zE + 4], [rear - 10, s, T0 - 2]], col, 1.5), { inner: true });
+    add('xt60', ddBox(rear - 16, -6, T0 - 4, rear - 4, 6, T0 + 4, matOf('#f4c430'), .8, 1));
+    add('cap', ddRod([rear + 4, 8, zC + 5], [rear - 16, 8, zC + 5], 4.5, matOf('#3b4a6b'), .8), { inner: true });
+    add('wire', ddWire([[L/2 - 21, 0, zC + 10], [bw - 2, 0, zF + 2]], '#8a8a8a', .5), { inner: true });
+  }
+  if (step('shell')){
+    for (const [x, y] of corners) add('standoff', ddCyl(x, y, zC, T0, 2.6, pal || DD_ALU, .7, 10));
+    add('plate', ddPrism(dd2Rect(-L/2, -W/2, L/2, W/2, 8), T0, T0 + 2.5, DD_CARBON, .9, 1.4), { cover: true, at: [L/2 - 10, -W/2 + 4, T0 + 2.5] });
+    if (g.action){
+      add('action', ddBox(L/2 - 34, -4, T0 + 2.5, L/2 - 4, 4, T0 + 8, pal, .7, .9), { cover: true });
+      const ac = ddBox(L/2 - 32, -35, T0 + 8, L/2 - 4, 35, T0 + 54, DD_CHIP, .9, 1.4), lens = ddRod([L/2 - 4, 18, T0 + 34], [L/2 + 4, 18, T0 + 34], 10, DD_CHIP, 1);
+      add('action', { svg: ac.svg + lens.svg, pts: [...ac.pts, ...lens.pts] }, { cover: true });
+    }
+    if (g.gps){ add('gps', ddBox(rear - 2, -14, T0 + 2.5, rear + 24, 14, T0 + 10, matOf('#2f3640'), .8, 1)); }
+  }
+  if (step('battery')){
+    const [bl, bw2, bh] = g.batt, x1 = g.action ? L/2 - 36 : g.gps ? bl/2 + 12 : bl/2, x0 = x1 - bl, z0 = T0 + 2.5;
+    const b = ddBox(x0, -bw2/2, z0, x1, bw2/2, z0 + bh, matOf('#3f9fd8'), 1, 1.8);
+    let svg = b.svg;
+    if (!DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw2/2 + .3 : -bw2/2 - .3;
+      svg += vis([0, sy > 0 ? 1 : -1, 0]) ? ddLabelY((x0 + x1)/2, sy, z0 + bh/2 - 3, g.cells, 9) : ''; }
+    add('battery', { svg, pts: b.pts }, { cover: true, at: [x0 + 6, bw2/2, z0 + bh*.7] });
+    const sx = (x0 + x1)/2;
+    add('strap', ddPrism(dd2Rect(sx - 7, -bw2/2 - 1.2, sx + 7, bw2/2 + 1.2), z0 + bh, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
+    for (const s of [-1, 1]) add('strap', ddBox(sx - 7, s > 0 ? bw2/2 : -bw2/2 - 1.2, z0, sx + 7, s > 0 ? bw2/2 + 1.2 : -bw2/2, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
+    add('xt60', ddWire([[x0 + 2, 4, z0 + bh*.4], [rear - 10, 4, T0 + 4]], '#e2483d', 1.4));
+    shadow.push(ddXF([x0, -bw2/2, z0 + bh]), ddXF([x1, bw2/2, z0 + bh]));
+  }
+}
+// text on a y = const face, reading correctly from whichever side faces the viewer
+function ddLabelY(x, y, z, str, size){
+  const o = P(...ddXF([x, y, z])), U = Dv(y > 0 ? -1 : 1, 0, 0), V = Dv(0, 0, -1);
+  return `<text transform="${txM(o, U, V)}" font-size="${size}" fill="#fff4d6" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${str}</text>`;
+}
+
+/* ---------- style: ducted (cinewhoop, tiny whoop) ---------- */
+function ddDuct(D, g, st, step, add, shadow){
+  const wh = !!g.whoop, pal = PALS[D.pal], zp0 = wh ? 7 : 3, zp1 = zp0 + (wh ? 1.5 : 2.5), R = g.motorR;
+  st.zMotor = zp1; st.zP = zp1 + R*.22 + g.motorH + 1;
+  const dH = Math.max(g.ductH, st.zP + 4), dR = g.ductR, thick = wh ? 1.2 : 2.5;
+  const L = wh ? 30 : 64, W = wh ? 22 : 40;
+  st.top = dH;
+  const ducts = () => g.motors.forEach(m => { const mx = g.arm*Math.cos(m.a*Math.PI/180), my = g.arm*Math.sin(m.a*Math.PI/180), n = 16;
+    for (let i = 0; i < n; i++){ const a0 = i/n*2*Math.PI, a1 = (i + 1)/n*2*Math.PI, pt = (r, a) => [mx + r*Math.cos(a), my + r*Math.sin(a)];
+      add('duct', ddPrism([pt(dR, a0), pt(dR + thick, a0), pt(dR + thick, a1), pt(dR, a1)], 0, dH, pal, .5, 0), { at: [mx + (dR + thick)*Math.cos(m.a*Math.PI/180), my + (dR + thick)*Math.sin(m.a*Math.PI/180), dH] }); }
+    // the duct's rim ink, top and bottom, in short pieces so they sort with the ring
+    for (let i = 0; i < n; i++){ const a0 = i/n*2*Math.PI, a1 = (i + 1)/n*2*Math.PI, ring = [];
+      for (const r of [dR, dR + thick]) for (const z of [0, dH]) ring.push([[mx + r*Math.cos(a0), my + r*Math.sin(a0), z], [mx + r*Math.cos(a1), my + r*Math.sin(a1), z]]);
+      const W2 = ring.map(seg => seg.map(ddXF)), hidden = !vis([Math.cos((a0 + a1)/2), Math.sin((a0 + a1)/2), 0]);
+      add('duct', { svg: W2.map(s2 => ink(pd(s2, false), 1.5)).join('') + (hidden ? '' : ink(pd([W2[2][0], W2[3][0]], false), .4)), pts: W2.flat() }); }
+    shadow.push(...ellUV(mx, my, dR + thick, dR + thick, 10).map(([u, v]) => ddXF([u, v, dH]))); });
+  if (step('frame')){
+    add('plate', ddPrism(dd2Rect(-L/2, -W/2, L/2, W/2, wh ? 4 : 8), zp0, zp1, wh ? pal : DD_CARBON, .9, 1.3), { at: [-L/2 + 4, W/2 - 3, zp1] });
+    g.motors.forEach(m => { add('arm', ddPrism(dd2Arm(m.a, wh ? 8 : 16, g.arm, g.armW, R*1.25), zp0, zp1, wh ? pal : DD_CARBON, .8, 1.1));
+      const mx = g.arm*Math.cos(m.a*Math.PI/180), my = g.arm*Math.sin(m.a*Math.PI/180);
+      for (const da of [70, -70]) { const a = m.a + 180 + da, poly = dd2Arm(a, 0, dR + thick/2, wh ? 2 : 4, 0).map(([u, v]) => [u + mx, v + my]);
+        add('arm', ddPrism(hull(poly), zp0, zp1, wh ? pal : DD_CARBON, .6, .8)); } });
+    if (wh) ducts();
+  }
+  if (!wh && step('arms')) ducts();
+  const s2 = g.stack/2, zE = zp1 + 3.5, zF = zE + 7;
+  if (!wh && step('esc')){
+    for (const sx of [-s2, s2]) for (const sy of [-s2, s2]) add('standoff', ddCyl(sx, sy, zp1, zF + 2, 1.2, DD_GREY, .6, 8));
+    add('esc', ddBox(-s2 - 3, -s2 - 3, zE, s2 + 3, s2 + 3, zE + 1.6, DD_PCB_E, .8, 1), { inner: true });
+  }
+  if (step('fc')){
+    const zz = wh ? zp1 + 1 : zF, h = wh ? 12 : s2 + 3;
+    add('fc', ddBox(-h, -h, zz, h, h, zz + 1.4, DD_PCB_F, .8, 1), { inner: true, at: [h, h, zz + 1] });
+    add('gyro', ddBox(-2, -2, zz + 1.4, 2, 2, zz + 2.4, matOf('#d8d8d8'), .5, .6), { inner: true });
+  }
+  const camX = wh ? L/2 - 4 : L/2 - 6, cs = wh ? 7 : 10;
+  if (step('camera')){
+    const cz = zp1 + (wh ? 2 : 3), cam = ddBox(camX - cs*1.2, -cs, cz, camX, cs, cz + cs*2, DD_CHIP, .8, 1.1);
+    const tilt = (D.fly.uptilt || 0)*Math.PI/180, lc = [camX, 0, cz + cs], lens = ddRod(lc, [camX + cs*.8*Math.cos(tilt), 0, cz + cs + cs*.8*Math.sin(tilt)], cs*.65, DD_CHIP, .9);
+    add('camera', { svg: cam.svg + lens.svg, pts: [...cam.pts, ...lens.pts] });
+    if (!wh) add('vtx', ddBox(-L/2 + 8, -15, zF + 2.5, 10, 15, zF + 10, matOf('#d9d6cc'), .8, 1), { inner: true });
+    for (const s of wh ? [0] : [-1, 1]) add('antenna', ddRod([-L/2 + 4, 6*s, zp1 + 6], [-L/2 - (wh ? 14 : 22), 12*s, zp1 + (wh ? 10 : 22)], wh ? .5 : 1.4, DD_WHITE, .7));
+  }
+  if (step('wiring')){
+    g.motors.forEach(m => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180), r0 = g.arm - R - 1, r1 = wh ? 10 : s2 + 2;
+      add('wire', ddWire([[r0*c, r0*s, zp1 + .6], [r1*c, r1*s, zp1 + .6], [r1*c, r1*s, (wh ? zp1 + 2 : zE + 1.6)]], wh ? '#e2483d' : '#f4b829', wh ? .4 : .7), { inner: true }); });
+    for (const [s, col] of [[2, '#e2483d'], [-2, '#3a3632']]) add('xt60', ddWire([[-s2 - 2, s, zE + 1], [-L/2 - 4, s, zp1 + 2], [-L/2 - 8, s, zp1 + 10]], col, wh ? .5 : 1.1), { inner: true });
+    if (!wh) add('cap', ddRod([-L/2 + 2, 9, zp1 + 4], [-L/2 - 10, 9, zp1 + 4], 3.5, matOf('#3b4a6b'), .8), { inner: true });
+  }
+  if (step('shell')){
+    const zt = wh ? zp1 + 10 : zF + 13;
+    add('canopy', ddPrism(hull([[-L/2 + 2, -W/2 + 3], [L/2 - 14, -W/2 + 3], [L/2 - 8, -W/2 + 8], [L/2 - 8, W/2 - 8], [L/2 - 14, W/2 - 3], [-L/2 + 2, W/2 - 3]]), zp1, zt, wh ? matOf('#f2efe7') : pal, 1, 1.5), { cover: true });
+    st.top = Math.max(st.top, zt);
+  }
+  if (step('battery')){
+    const [bl, bw2, bh] = g.batt;
+    const z0 = wh ? zp0 - bh : zF + 13, b = ddBox(-bl/2 - (wh ? 0 : 4), -bw2/2, z0, bl/2 - (wh ? 0 : 4), bw2/2, z0 + bh, matOf('#3f9fd8'), 1, 1.6);
+    let svg = b.svg;
+    if (!wh && !DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw2/2 + .3 : -bw2/2 - .3; svg += ddLabelY(-4, sy, z0 + bh/2 - 3, g.cells, 8); }
+    add('battery', { svg, pts: b.pts }, { cover: !wh, at: [bl/2 - 6, bw2/2, z0 + bh*.6] });
+    if (!wh) add('strap', ddPrism(dd2Rect(-11, -bw2/2 - 1, 3, bw2/2 + 1), z0 + bh, z0 + bh + 1.2, matOf('#e2483d'), .7, .9), { cover: true });
+    st.top = Math.max(st.top, z0 + bh);
+  }
+}
+
+/* ---------- style: folding camera drone with a moulded shell (Mini) ---------- */
+const DD_MINI_POS = [[88, 104], [-86, 98], [-86, -98], [88, -104]];
+function ddShell(D, g, st, step, add, shadow){
+  const pal = PALS[D.pal], light = DD_WHITE, X0 = -72, X1 = 62, XN = 78;
+  g.pos = DD_MINI_POS;
+  st.zMotor = 0; st.zP = 0;
+  // front motors sit high on the upper arms, rear motors low on the lower arms
+  const mz = [40, 26, 26, 40]; st.motors.forEach((m, i) => { m.x = DD_MINI_POS[i][0]; m.y = DD_MINI_POS[i][1]; m.z0 = mz[i]; m.zP = mz[i] + g.motorR*.22 + g.motorR*1.2 + 2; });
+  g.motorH = g.motorR*1.2;
+  const lower = rrUV(-31, 10, 31, 34, 7, 4), upper = rrUV(-30, 33, 30, 57, 12, 4), sc = (pr, k, cz) => pr.map(([y, z]) => [y*k, cz + (z - cz)*k]);
+  if (step('frame')){
+    add('shell', ddSweep(lower, X0, lower, X1, light), { cover: true, at: [X1 - 10, -31, 22] });
+    add('shell', ddSweep(lower, X1, sc(lower, .72, 22), XN - 4, light, 1.2), { cover: true });
+  }
+  if (step('arms')){
+    st.motors.forEach((m, i) => { const front = m.x > 0, s = Math.sign(m.y), hinge = front ? [X1 - 8, 29*s, 30] : [X0 + 8, 29*s, 16];
+      const pod = [m.x, m.y, front ? m.z0 - 4 : m.z0 - 4];
+      add('arm', ddRod(hinge, pod, 5, light, 1), { at: [(hinge[0] + pod[0])/2, (hinge[1] + pod[1])/2, (hinge[2] + pod[2])/2 + 5] });
+      add('arm', ddCyl(m.x, m.y, front ? m.z0 - 14 : 0, m.z0, g.motorR + 1.5, light, 1, 16));
+      if (front) add('foot', ddRod([m.x, m.y, m.z0 - 14], [m.x, m.y, 0], 2.5, light, .8));
+      add('arm', ddCyl(hinge[0], hinge[1], hinge[2] - 5, hinge[2] + 5, 5.5, matOf('#c9c4b6'), .8, 12)); });
+  }
+  if (step('esc')) add('esc', ddBox(-6, -22, 13, 44, 22, 14.6, DD_PCB_E, .8, 1), { inner: true });
+  if (step('fc')){
+    const b = ddBox(-4, -24, 26, 52, 24, 27.6, DD_PCB_F, .8, 1), soc = ddBox(14, -9, 27.6, 30, 9, 29.4, DD_CHIP, .5, .6);
+    add('fc', { svg: b.svg + soc.svg, pts: b.pts }, { inner: true, at: [52, 24, 27] });
+    add('gyro', ddBox(36, -4, 27.6, 40, 0, 28.8, matOf('#d8d8d8'), .5, .6), { inner: true });
+  }
+  if (step('camera')){
+    const br = ddBox(XN - 6, -6, 12, XN + 2, 6, 22, matOf('#c9c4b6'), .8, 1), roll = ddRod([XN + 2, 0, 17], [XN + 8, 0, 17], 7, DD_CHIP, .9);
+    add('gimbal', { svg: br.svg + roll.svg, pts: [...br.pts, ...roll.pts] }, { at: [XN + 6, 7, 17] });
+    add('gimbal', ddBox(XN + 8, -17, 6, XN + 12, -13, 24, DD_CHIP, .8, 1));
+    add('gimbal', ddRod([XN + 16, -19, 15], [XN + 16, -13, 15], 6, DD_CHIP, .9));
+    const head = ddBox(XN + 12, -12, 5, XN + 30, 12, 25, DD_CHIP, .9, 1.3), lens = ddRod([XN + 30, 0, 15], [XN + 34, 0, 15], 7, DD_CHIP, .9), gl = ddRod([XN + 34, 0, 15], [XN + 34.6, 0, 15], 4.8, matOf('#4b6b9a'), .6);
+    add('camera', { svg: head.svg + lens.svg + gl.svg, pts: [...head.pts, ...lens.pts] });
+    add('gps', ddBox(-60, -13, 46, -34, 13, 50, matOf('#c9a45a'), .7, .9), { inner: true });
+    for (const s of [-1, 1]) add('antenna', ddRod([88, 104*s, 24], [88, 104*s, 6], 1.2, matOf('#7a7a7a'), .6), { inner: true });
+  }
+  if (step('wiring')){
+    st.motors.forEach(m => { const front = m.x > 0, s = Math.sign(m.y);
+      add('wire', ddWire([[front ? 30 : -10, 20*s, front ? 27 : 14], [front ? X1 - 8 : X0 + 8, 27*s, front ? 30 : 16], [m.x, m.y, m.z0 - 2]], '#d9a640', .6), { inner: true }); });
+    add('wire', ddWire([[48, 0, 27], [XN - 4, 0, 20], [XN + 4, 0, 17]], '#d9a640', 1), { inner: true });
+  }
+  if (step('shell')){
+    add('shell', ddSweep(upper, X0, upper, X1 - 2, pal, 1.6), { cover: true, at: [0, 30, 50] });
+    add('shell', ddSweep(upper, X1 - 2, sc(upper, .7, 40), XN - 8, pal, 1.2), { cover: true });
+  }
+  if (step('battery')){
+    const b = ddBox(X0 - 1, -24, 13, -6, 24, 33, matOf('#4a4a4a'), 1, 1.4);
+    let svg = b.svg; if (vis([-1, 0, 0])) svg += shape([[X0 - 1.2, -6, 20], [X0 - 1.2, 6, 20], [X0 - 1.2, 6, 26], [X0 - 1.2, -6, 26]].map(ddXF), '#8af0ae', .5);
+    add('battery', { svg, pts: b.pts }, { inner: true, at: [X0, 20, 28] });
+  }
+  if (step('frame')) shadow.push(...[[X0, -31, 34], [X1, 31, 34], [X0, 31, 34], [X1, -31, 34], [XN, 0, 30]].map(ddXF));
+  st.top = 60;
+}
+
+/* ---------- style: round centre plates, tube arms, landing gear (octo, hexa) ---------- */
+function ddRound(D, g, st, step, add, shadow){
+  const Rp = g.plateR, k = Rp/165, G = g.gearH, pal = PALS[D.pal], tr = 12.5*k, zt = G + 4 + tr, Rm = g.motorR;
+  const zMt = G + 31*k; st.zMotor = zMt; st.zP = zMt + Rm*.22 + Rm*.65 + 3; g.motorH = Rm*.65;
+  const plate = ellUV(0, 0, Rp, Rp, 24);
+  if (step('frame')){
+    add('plate', ddPrism(plate, G, G + 4*k, DD_CARBON, .9, 1.4), { at: [Rp*.7, -Rp*.7, G + 4] });
+    add('plate', ddPrism(plate, G + 27*k, G + 31*k, DD_CARBON, .9, 1.4), { at: [-Rp*.7, Rp*.7, G + 31*k] });
+    // landing gear: four legs to two skids
+    for (const sy of [-1, 1]){ for (const sx of [-1, 1]) add('gear', ddRod([sx*.42*Rp, sy*.62*Rp, G], [sx*1.15*Rp, sy*1.4*Rp, 10*k], 7*k, DD_CARBON, 1), { at: [sx*.8*Rp, sy*1.0*Rp, G*.5] });
+      add('gear', ddRod([-1.7*Rp, sy*1.4*Rp, 10*k], [1.7*Rp, sy*1.4*Rp, 10*k], 8*k, DD_CARBON, 1));
+      for (const sx of [-1, 1]) add('foot', ddCyl(sx*1.15*Rp, sy*1.4*Rp, 0, 3*k, 14*k, DD_RUBBER, .8, 10)); }
+    // battery tray hung under the bottom plate
+    add('plate', ddBox(-.75*Rp, -.72*Rp, G - 92*k, .75*Rp, .72*Rp, G - 88*k, DD_CARBON, .8, 1.1));
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) add('standoff', ddCyl(sx*.65*Rp, sy*.62*Rp, G - 88*k, G, 4*k, DD_ALU, .7, 8));
+    shadow.push(...[[-1.7*Rp, -1.4*Rp, 10], [1.7*Rp, 1.4*Rp, 10], [1.7*Rp, -1.4*Rp, 10], [-1.7*Rp, 1.4*Rp, 10]].map(ddXF));
+  }
+  if (step('arms')) g.motors.forEach(m => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180);
+    add('arm', ddRod([.55*Rp*c, .55*Rp*s, zt], [(g.arm - 26*k)*c, (g.arm - 26*k)*s, zt], tr, DD_CARBON, 1.1), { at: [g.arm*.6*c, g.arm*.6*s, zt + tr] });
+    add('arm', ddPrism(dd2Rot(g.arm*c, g.arm*s, m.a, 56*k, 56*k), G + 4*k, zMt, matOf('#3a3632'), .8, 1));
+    add('arm', ddPrism(dd2Rot(.85*Rp*c, .85*Rp*s, m.a, 30*k, 36*k), G + 2*k, G + 33*k, pal, .7, .9));
+    shadow.push(ddXF([g.arm*c, g.arm*s, zMt])); });
+  if (step('esc')) g.motors.forEach(m => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180), r = g.arm*.68;
+    add('esc', ddPrism(dd2Rot(r*c, r*s, m.a, 74*k, 34*k), zt - 15*k, zt + 15*k, matOf('#4a5a7a'), .8, 1), { at: [r*c, r*s, zt + 15*k] }); });
+  if (step('fc')){
+    const fc = ddBox(-26*k, -22*k, G + 31*k, 26*k, 22*k, G + 61*k, matOf('#e8e4da'), .9, 1.2), stripe = ddBox(-26.3*k, -22.3*k, G + 52*k, 26.3*k, 22.3*k, G + 57*k, matOf('#f08a3c'), .6, 0);
+    add('fc', { svg: fc.svg + stripe.svg, pts: fc.pts }, { at: [26*k, 22*k, G + 55*k] });
+    add('gps', ddRod([-.86*Rp, 0, G + 31*k], [-.86*Rp, 0, G + 180*k], 5*k, DD_CARBON, .9));
+    add('gps', ddCyl(-.86*Rp, 0, G + 180*k, G + 196*k, 40*k, matOf('#2f3640'), 1.1, 20), { at: [-.86*Rp, 40*k, G + 192*k] });
+  }
+  const gx = 1.2*Rp;
+  if (step('camera')){
+    for (const sy of [-1, 1]) add('gimbal', ddRod([.3*Rp, sy*40*k, G - 6*k], [gx + 30*k, sy*40*k, G - 6*k], 6*k, DD_SILVER, .8));
+    add('gimbal', ddCyl(gx, 0, G - 34*k, G - 8*k, 24*k, DD_CHIP, 1, 16), { at: [gx + 24*k, 0, G - 20*k] });
+    add('gimbal', ddBox(gx - 12*k, -82*k, G - 46*k, gx + 12*k, 82*k, G - 34*k, DD_CHIP, .8, 1.1));
+    for (const sy of [-1, 1]){ add('gimbal', ddBox(gx - 10*k, sy > 0 ? 70*k : -82*k, G - 160*k, gx + 10*k, sy > 0 ? 82*k : -70*k, G - 46*k, DD_CHIP, .8, 1.1));
+      add('gimbal', ddRod([gx, sy*84*k, G - 120*k], [gx, sy*70*k, G - 120*k], 22*k, DD_CHIP, .9)); }
+    if (g.gimbal === 'cine'){
+      const cam = ddBox(gx - 70*k, -62*k, G - 172*k, gx + 70*k, 62*k, G - 70*k, matOf('#cf5038'), 1, 1.6), lens = ddRod([gx + 70*k, 0, G - 122*k], [gx + 140*k, 0, G - 122*k], 38*k, DD_CHIP, 1.1), gl = ddRod([gx + 140*k, 0, G - 122*k], [gx + 142*k, 0, G - 122*k], 28*k, matOf('#4b6b9a'), .7);
+      add('camera', { svg: cam.svg + lens.svg + gl.svg, pts: [...cam.pts, ...lens.pts] });
+    } else {
+      const cam = ddBox(gx - 50*k, -55*k, G - 160*k, gx + 50*k, 55*k, G - 80*k, matOf('#e8e4da'), 1, 1.4), lens = ddRod([gx, 0, G - 160*k], [gx, 0, G - 190*k], 26*k, DD_CHIP, 1);
+      add('camera', { svg: cam.svg + lens.svg, pts: [...cam.pts, ...lens.pts] });
+    }
+    add('rx', ddBox(.2*Rp, -.5*Rp, G + 31*k, .45*Rp, -.3*Rp, G + 39*k, matOf('#2f3640'), .7, .9));
+    for (const s of [-1, 1]) add('antenna', ddRod([.1*Rp, s*.9*Rp, G + 4*k], [.1*Rp, s*.9*Rp, G - 70*k], 3*k, DD_WHITE, .7));
+  }
+  if (step('wiring')){
+    add('pdb', ddPrism(ellUV(0, 0, .5*Rp, .5*Rp, 8), G + 4*k, G + 7*k, DD_COPPER, .8, 1), { inner: true });
+    g.motors.forEach(m => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180), r0 = .45*Rp, r1 = g.arm*.68 - 37*k, r2 = g.arm*.68 + 37*k, r3 = g.arm - 30*k;
+      for (const [o, col] of [[-5*k, '#e2483d'], [5*k, '#3a3632']]) add('wire', ddWire([[r0*c - s*o, r0*s + c*o, G + 7*k], [r1*c - s*o, r1*s + c*o, zt + tr + 2]], col, 1.2), { inner: true });
+      add('wire', ddWire([[r2*c, r2*s, zt + tr], [r3*c, r3*s, zMt - 4*k]], '#f4b829', 1.2), { inner: true }); });
+    for (const sy of [-1, 1]) add('xt60', ddWire([[-.4*Rp, sy*.3*Rp, G + 5*k], [-.6*Rp, sy*.5*Rp, G - 40*k]], '#e2483d', 1.6), { inner: true });
+  }
+  if (step('shell')) add('canopy', ddDome(0, 0, G + 31*k, .7*Rp, .4*Rp, pal), { cover: true });
+  if (step('battery')) for (const sy of [-1, 1]){
+    const b = ddBox(-.62*Rp, sy > 0 ? .05*Rp : -.62*Rp, G - 88*k - 70*k, .62*Rp, sy > 0 ? .62*Rp : -.05*Rp, G - 88*k, matOf('#3f9fd8'), 1, 1.6);
+    add('battery', b, { at: [.62*Rp, sy*.4*Rp, G - 120*k] });
+    add('strap', ddBox(-.1*Rp, sy > 0 ? .04*Rp : -.63*Rp, G - 160*k, .1*Rp, sy > 0 ? .63*Rp : -.04*Rp, G - 157*k, matOf('#e2483d'), .6, .8));
+  }
+  st.top = G + 200*k;
+}
+
+/* ---------- extents (for framing and the build mat) ---------- */
+function ddExtent(D){
+  const g = D.geo;
+  const r = g.style === 'shell' ? 160 : g.arm + (g.style === 'duct' ? g.ductR + 3 : g.propR);
+  const h = g.style === 'round' ? g.gearH + 200*g.plateR/165 : g.style === 'shell' ? 70 : g.style === 'duct' ? (g.whoop ? 32 : 62) : 12 + g.standH + (g.action ? 56 : g.batt[2] + 6);
+  return { r, h };
+}
+
+/* ---------- thumbnails of the two fixed-wing types (hub only; they are not built yet) ---------- */
+function ddWingThumb(D){
+  const pal = PALS[D.pal], items = [];
+  const wing = [[120, 0], [-40, 330], [-95, 330], [-70, 0], [-95, -330], [-40, -330]];
+  // convex halves of the swept wing, split down the middle so each is convex
+  for (const half of [[[120, 0], [-40, 330], [-95, 330], [-70, 0]], [[120, 0], [-70, 0], [-95, -330], [-40, -330]]]) items.push(ddPrism(half, 30, 44, pal, .9, 1.6));
+  for (const s of [-1, 1]) items.push(ddBox(-98, s > 0 ? 330 : -336, 30, -46, s > 0 ? 336 : -330, 110, matOf('#3d3935'), .8, 1.2));
+  items.push(ddRod([-70, 0, 37], [-92, 0, 37], 14, DD_CHIP, 1));
+  items.push(ddBox(-97, -70, 33, -94, 70, 41, DD_CHIP, .8, 1));
+  items.push(ddRod([118, 0, 40], [132, 0, 42], 8, DD_CHIP, .9));
+  return items;
+}
+function ddVtolThumb(D){
+  const pal = PALS[D.pal], items = [];
+  items.push(ddSweep(rrUV(-40, 30, 40, 100, 20, 4), -260, rrUV(-40, 30, 40, 100, 20, 4), 180, DD_WHITE, 1.6));
+  items.push(ddSweep(rrUV(-40, 30, 40, 100, 20, 4), 180, rrUV(-12, 58, 12, 80, 8, 4), 250, DD_WHITE, 1.2));
+  items.push(ddPrism([[60, -560], [0, -560], [-10, 560], [60, 560]].map(([x, y]) => [x, y]), 92, 104, pal, .9, 1.5));
+  for (const s of [-1, 1]){ items.push(ddRod([300, s*220, 90], [-420, s*220, 90], 10, DD_CARBON, 1));
+    for (const x of [270, -390]){ items.push(ddCyl(x, s*220, 100, 120, 20, DD_SILVER, .9)); items.push(ddProp(x, s*220, 122, 150, 2, s*(x > 0 ? 1 : -1), '#3d3935', 30 + x, 0)); }
+    items.push(ddBox(-440, s > 0 ? 220 : -310, 90, -390, s > 0 ? 310 : -220, 96, pal, .8, 1)); }
+  items.push(ddRod([-260, 0, 65], [-290, 0, 65], 16, DD_CHIP, 1));
+  items.push(ddBox(-294, -110, 60, -290, 110, 70, DD_CHIP, .8, 1));
+  return items;
+}
+
+</script>
+<script>
+/* Drone Lab assembly: build a drone part by part in the real order, look through it, and see how differential
+   thrust flies it. One figure per drone (?d=id); the model and all parts live in drone-draw.js. */
+const dlQ = new URLSearchParams(location.search);
+const DR = dlDrone(dlQ.get('d') || 'freestyle');
+const DR_EXT = ddExtent(DR), DR_M = DR_EXT.r*.94, DR_MH = Math.max(1.5, DR_EXT.r*.025);
+const DR_MAT = { l:'#8cc4a6', m:'#6aa585', d:'#3f6f56' };
+DD_O = [DR_M, DR_M, DR_MH];
+// which build steps this drone really has (a tiny whoop has no separate ESC or arms)
+const DR_ALL = ddModel(DR, { show: () => 1, drop: 0 });
+const DR_STEPS = [...new Set(DR_ALL.items.map(it => it.step))].filter(i => i >= 0).sort((a, b) => a - b);
+const DR_MOT = DR_ALL.motors;
+const DR_DEMOS = {
+  hover:  { label:'Hover', t:'Hover: every motor pushes the same and total thrust equals the weight. Two props spin clockwise and two counter-clockwise: each twists the frame the other way, the twists cancel, so it does not spin.' },
+  climb:  { label:'Climb (throttle)', t:'Throttle up: all motors speed up together. Thrust is now more than the weight, so the drone accelerates upward. Throttle sets height, not speed.' },
+  pitch:  { label:'Pitch forward', t:'Pitch forward: the flight controller speeds up the rear motors and slows the front ones. The nose dips, the thrust leans forward, and the drone accelerates forward. This "mixing" is added on top of the throttle for every motor.' },
+  roll:   { label:'Roll right', t:'Roll right: the left motors speed up and the right ones slow down, so the drone banks and slides right. Stop the stick and the gyro holds the new angle.' },
+  yaw:    { label:'Yaw right', t:'Yaw right: the counter-clockwise props speed up and the clockwise ones slow down. Total thrust stays the same so height holds, but the twists no longer cancel: the frame turns opposite to the faster props.' },
+};
+const dlTarget = st => {
+  const d = st.demo, n = DR_MOT.length, base = d === 'climb' ? 1.35 : 1;
+  const thr = DR_MOT.map(m => d === 'pitch' ? (m.x < 0 ? 1.28 : .72) : d === 'roll' ? (m.y > 0 ? 1.28 : .72) : d === 'yaw' ? (m.dir < 0 ? 1.3 : .7) : base);
+  return { thr: d ? thr : Array(n).fill(0), r: d === 'roll' ? .16 : 0, p: d === 'pitch' ? .16 : 0, lift: d ? DR_EXT.h*(d === 'climb' ? .7 : .35) : 0 };
+};
+
+const dlShow = st => i => { const k = DR_STEPS.indexOf(i); if (k < 0) return 0; return k < st.done - 1 ? 1 : k === st.done - 1 ? st.anim : 0; };
+const dlWeight = st => DR_STEPS.slice(0, st.done).reduce((a, i) => a + DR.wt[i], 0);
+const dlFmtW = g => g >= 1000 ? (g/1000).toFixed(g >= 10000 ? 1 : 2) + ' kg' : Math.round(g) + ' g';
+
+function scene(st){
+  DD_T = { r: st.cur.r, p: st.cur.p, y: st.cur.y, zc: DR_EXT.h*.4, lift: st.cur.lift };
+  const tg = st.cur.thr, mod = ddModel(DR, { show: dlShow(st), drop: DR_EXT.h*1.4, from: { battery: DR.geo.style === 'shell' ? [-1.4, 0, 0] : [0, 0, 1] },
+    spin: st.spin, speeds: tg, thrust: st.demo || tg.some(v => v > .05) ? tg : null, arrows: true, sel: st.sel });
+  const M2 = 2*DR_M, top = boardTop(0, 0, M2, M2, DR_MH, DR_M*.06);
+  let s = board(0, 0, M2, M2, DR_MH, DR_M*.06, DR_MAT);
+  // cutting-mat grid
+  let gl = ''; for (let i = 1; i < 12; i++){ const t = M2*i/12; gl += pd([[t, 4, DR_MH + .02], [t, M2 - 4, DR_MH + .02]], false) + pd([[4, t, DR_MH + .02], [M2 - 4, t, DR_MH + .02]], false); }
+  s += `<path d="${gl}" fill="none" stroke="#e8f3ec" stroke-width=".7" opacity=".7"/>`;
+  if (mod.shadow.length > 2) s += `<g opacity=".55">${castShadow(mod.shadow, DR_MH, top)}</g>`;
+  const k = ease(st.xr || 0);
+  s += byDepth(mod.items.map(it => ({ box: it.box, svg: k > 0 && it.cover ? `<g opacity="${f(1 - .84*k)}">${it.svg}</g>` : it.svg })));
+  if (k > 0) s += `<g opacity="${f(k)}">${byDepth(mod.items.filter(it => it.inner))}</g>`;
+  const justPlaced = st.done ? DR_STEPS[st.done - 1] : -1, stepOf = {};
+  for (const it of mod.items) if (stepOf[it.key] == null) stepOf[it.key] = it.step;
+  // a handful of labels at a time: the outside parts normally, the electronics in see-through
+  const want = k > .6 ? ['fc', 'esc', 'gyro', 'rx', 'vtx', 'pdb', 'gps', 'xt60', 'cap', 'wire', 'battery', 'camera']
+    : ['plate', 'arm', 'duct', 'shell', 'motor', 'prop', 'camera', 'gimbal', 'action', 'battery', 'canopy', 'gear', 'antenna', 'fc', 'esc'];
+  const lab = Object.entries(mod.labels).filter(([key]) => DL_PARTS[key] && (want.includes(key) || key === st.sel))
+    .sort((a, b) => (b[0] === st.sel) - (a[0] === st.sel) || want.indexOf(a[0]) - want.indexOf(b[0])).slice(0, 9).map(([key, at]) => ({ at, text: DL_PARTS[key][0], on: st.sel === key || stepOf[key] === justPlaced }));
+  if (lab.length) s += xrCallouts(lab, [DR_M - DR_EXT.r, DR_M + DR_EXT.r, DR_M - DR_EXT.r, DR_M + DR_EXT.r, DR_MH, DR_MH + DR_EXT.h]);
+  dlInfo(st);
+  return s;
+}
+
+/* ---------- the explanation card under the figure ---------- */
+let dlInfoEl = null, dlInfoHtml = '';
+function dlInfo(st){
+  if (!dlInfoEl){ dlInfoEl = document.createElement('div'); dlInfoEl.className = 'dlinfo'; const stg = document.querySelector('.stage'); if (!stg) return; stg.after(dlInfoEl); }
+  const next = st.done < DR_STEPS.length ? DL_STEPS[DR_STEPS[st.done]].name : null;
+  let h, t;
+  if (st.sel && DL_PARTS[st.sel]){ [h, t] = DL_PARTS[st.sel]; }
+  else if (st.demo){ h = 'How it flies: ' + DR_DEMOS[st.demo].label; t = DR_DEMOS[st.demo].t; }
+  else if (st.done){ const sp = DL_STEPS[DR_STEPS[st.done - 1]]; h = `Step ${st.done} of ${DR_STEPS.length}: ${sp.name}`; t = sp.t; }
+  else { h = DR.name + ' (' + DR.cls + ')'; t = DR.blurb + ' ' + DR.facts.map(([a, b]) => a + ': ' + b).join(', ') + '.'; }
+  const nx = next ? `Next part: <strong>${next}</strong>.` : 'Fully built. Try How it flies, then Fly it.';
+  const lg = st.done > DR_STEPS.indexOf(DD_STEP_I.motors) ? ` <span><b style="background:${DD_CW}"></b>clockwise from above <b style="background:${DD_CCW}"></b>counter-clockwise <b style="background:#f4b829"></b>thrust</span>` : '';
+  const html = `<h2>${h}</h2><p>${t}</p><div class="lg">${nx} Click any part to read what it does. <a href="drone-lab.html">All drones</a>${lg}</div>`;
+  if (html !== dlInfoHtml){ dlInfoHtml = html; dlInfoEl.innerHTML = html; }
+}
+
+/* ---------- behaviour ---------- */
+let ui;
+const dlStore = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+function dlPlace(st, ms = 550){
+  if (st.done >= DR_STEPS.length) return ui.flash('Fully built. Press Fly it, or Take apart to start again');
+  st.done++; st.anim = 0; st.sel = null;
+  if (st.done === DR_STEPS.length) dlStore('dl-built-' + DR.id, '1');
+  ui.animate(dt => { st.anim = Math.min(1, st.anim + dt*1000/ms); return st.anim < 1; });
+}
+function dlRemove(st){
+  if (!st.done) return ui.flash('Nothing to take off yet');
+  dlDemo(st, null); st.done--; st.anim = 1; st.sel = null;
+}
+function dlBuildAll(st){
+  if (st.done >= DR_STEPS.length) return ui.flash('Already fully built');
+  let t = 0; st.building = true;
+  ui.animate(dt => { if (!st.building) return false; t += dt; if (st.anim >= 1 && t > .12){ t = 0; dlPlace(st, 300); } if (st.done >= DR_STEPS.length && st.anim >= 1){ st.building = false; return false; } return true; });
+}
+function dlApart(st){ st.building = false; dlDemo(st, null); st.done = 0; st.anim = 1; st.sel = null; }
+let dlDemoOn = false;
+function dlDemo(st, d){
+  st.demo = d;
+  if (dlDemoOn) return; dlDemoOn = true;
+  ui.animate(dt => { const tg = dlTarget(st), a = Math.min(1, dt*3);
+    st.cur.thr = st.cur.thr.map((v, i) => v + (tg.thr[i] - v)*a);
+    st.cur.r += (tg.r - st.cur.r)*a; st.cur.p += (tg.p - st.cur.p)*a; st.cur.lift += (tg.lift - st.cur.lift)*a;
+    if (st.demo === 'yaw') st.cur.y -= dt*.9; else { const y0 = Math.round(st.cur.y/(2*Math.PI))*2*Math.PI; st.cur.y += (y0 - st.cur.y)*a; }
+    const sp = st.cur.thr.reduce((x, y) => x + y, 0)/st.cur.thr.length; st.spin += dt*900*sp;
+    const idle = !st.demo && sp < .01 && Math.abs(st.cur.r) + Math.abs(st.cur.p) + st.cur.lift < .5 && Math.abs(st.cur.y % (2*Math.PI)) < .01;
+    if (idle){ st.cur = { r:0, p:0, y:0, lift:0, thr: st.cur.thr.map(() => 0) }; dlDemoOn = false; }
+    return !idle; });
+}
+
+ui = mountFigure({
+  fig: String(DL_DRONES.indexOf(DR) + 1).padStart(2, '0'), turn:'full', title: DR.name, credit:false,
+  size:[2*DR_M, 2*DR_M, DR_MH + DR_EXT.h*1.55], palette: DR.pal,
+  state:{ done:0, anim:1, demo:null, spin:0, sel:null, building:false, cur:{ r:0, p:0, y:0, lift:0, thr: DR_MOT.map(() => 0) } },
+  scene,
+  buttons:[
+    { label:'Drone', choices: () => DL_DRONES.filter(d => d.ready).map(d => ({ label: d.name, current: d.id === DR.id, onClick: () => { location.search = '?d=' + d.id; } })) },
+    { label:'Add next part', onClick: st => dlPlace(st) },
+    { label:'Remove last part', onClick: st => dlRemove(st) },
+    { label:'Build it all', onClick: st => dlBuildAll(st) },
+    { label:'Take apart', onClick: st => dlApart(st) },
+    { label:'How it flies', choices: st => [...Object.entries(DR_DEMOS).map(([k, d]) => ({ label: d.label, current: st.demo === k,
+        disabled: st.done < DR_STEPS.length, why: `Finish the build first: ${DR_STEPS.length - st.done} parts to go`, onClick: s => dlDemo(s, k) })),
+        { label:'Stop motors', disabled: !st.demo, why:'The motors are already stopped', onClick: s => dlDemo(s, null) }] },
+    { label:'Fly it', onClick: st => st.done < DR_STEPS.length ? ui.flash(`Finish the build first: ${DR_STEPS.length - st.done} parts to go (or Build it all)`) : (location.href = 'drone-flight.html?d=' + DR.id) },
+  ],
+  stats: st => [
+    { label:'Step', value: `${st.done}/${DR_STEPS.length}` },
+    { label:'Weight', value: dlFmtW(dlWeight(st)), small:true },
+    st.done >= DR_STEPS.length ? { label:'Thrust : weight', value: DR.fly.twr + ' : 1', small:true } : null ],
+  acts:{ part: (st, el) => { st.sel = st.sel === el.dataset.k ? null : el.dataset.k; } },
+  params: (st, q) => {
+    if (q.has('done')) st.done = q.get('done') === 'all' ? DR_STEPS.length : Math.max(0, Math.min(DR_STEPS.length, +q.get('done') | 0));
+    if (q.has('sel')) st.sel = q.get('sel');
+    if (q.has('demo') && st.done >= DR_STEPS.length){ st.demo = q.get('demo'); const tg = dlTarget(st); st.cur = { r: tg.r, p: tg.p, y: 0, lift: tg.lift, thr: tg.thr }; st.spin = 40; }
+  },
+});
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(), st = ui.st;
+  if (k === 'n' || k === ' ') dlPlace(st); else if (k === 'backspace') dlRemove(st); else if (k === 'f' && st.done >= DR_STEPS.length) location.href = 'drone-flight.html?d=' + DR.id; else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+// back to the hub, in the header
+document.querySelector('header').insertAdjacentHTML('beforeend', '<a href="drone-lab.html" style="color:#231e16;font-size:12px;letter-spacing:.08em;text-transform:uppercase">All drones</a>');
+</script><style>@media (max-width:560px),(pointer:coarse){#art{filter:none!important}.ctl:has(#wb){display:none!important}}</style><style>@media (max-width:560px){html body .kpad{width:100%;box-sizing:border-box;justify-content:space-between;gap:10px;margin:10px 0 0;padding:0;border:0;background:none;box-shadow:none}
+html body .kpad .dp{display:flex;gap:8px}html body .kpad .hub{display:none}
+html body .kpad .k{width:46px;height:42px;font-size:14px;border-radius:9px}
+html body .kpad .go{width:auto;height:42px;padding:0 26px;border-radius:999px;flex-direction:row;font-size:13px;box-shadow:0 3px 0 var(--ink),inset 0 -4px 0 rgba(0,0,0,.18)}
+html body .kpad .go small{display:none}html body .kpad .go.down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink),inset 0 -2px 0 rgba(0,0,0,.18)}}</style>
+<script>requestAnimationFrame(() => { const o = { "◀": 0, "▲": 1, "▼": 2, "▶": 3 }; for (const k of document.querySelectorAll(".kpad .k")) k.style.order = o[k.textContent] ?? 0; });</script><style>@media (max-width:560px){.vset{margin:8px 0 2px!important}}</style><script>requestAnimationFrame(() => { const v = document.querySelector(".vset"), s = document.getElementById("stats"), z = document.querySelector(".zwrap"); if (!v) return; if (z && z.parentNode === v.parentNode){ const kp = document.querySelector(".kpad"); if (kp && innerWidth <= 560){ z.after(kp); kp.after(v); } else z.after(v); } else if (s && s.parentNode) s.parentNode.insertBefore(v, s); });</script><script>(() => { const fit = () => { const fig = document.getElementById("fig"); if (!fig) return;
+  fig.style.maxHeight = ""; if (innerWidth <= 560) return;
+  const extra = document.documentElement.scrollHeight - fig.clientHeight, room = innerHeight - extra - 12;
+  if (room < fig.clientHeight) fig.style.maxHeight = Math.max(320, room) + "px"; };
+  addEventListener("load", () => requestAnimationFrame(fit)); addEventListener("resize", fit); setTimeout(fit, 400); })();</script><style>.zwrap{position:relative}.zwrap.on{overflow:hidden}@media (min-width:561px){.zwrap.on{overflow:visible}html.zoomed,html.zoomed body{overflow:hidden}}.zwrap #fig{transform-origin:0 0}
+.zchip{position:absolute;right:2px;bottom:6px;display:flex;align-items:center;gap:2px;font:600 11px ui-monospace,Menlo,monospace;
+ background:rgba(242,239,231,.88);border:1px solid rgba(35,30,22,.25);border-radius:999px;padding:2px;z-index:3;user-select:none}
+.zchip button{all:unset;cursor:pointer;min-width:22px;height:22px;line-height:22px;text-align:center;border-radius:999px;color:#231e16}
+.zchip button:hover{background:rgba(35,30,22,.08)}.zchip .zp{min-width:44px}</style>
+<script>(() => { const fig = document.getElementById("fig"); if (!fig) return;
+  const wrap = document.createElement("div"); wrap.className = "zwrap"; fig.parentNode.insertBefore(wrap, fig); wrap.appendChild(fig);
+  const chip = document.createElement("div"); chip.className = "zchip";
+  chip.innerHTML = '<button class="zm" aria-label="Zoom out">−</button><button class="zp" aria-label="Reset zoom">100%</button><button class="zi" aria-label="Zoom in">+</button>';
+  wrap.appendChild(chip);
+  let s = 1, tx = 0, ty = 0;
+  const box = () => ({ w: fig.clientWidth, h: fig.clientHeight });
+  const apply = () => { const { w, h } = box(); s = Math.min(5, Math.max(1, s));
+    if (s <= 1.001){ s = 1; tx = ty = 0; } else { tx = Math.min(0, Math.max(w - w*s, tx)); ty = Math.min(0, Math.max(h - h*s, ty)); }
+    fig.style.transform = s === 1 ? "" : `translate(${tx}px,${ty}px) scale(${s})`; wrap.classList.toggle("on", s > 1); document.documentElement.classList.toggle("zoomed", s > 1);   /* desktop: nothing is cut off, the page just does not scroll while zoomed */
+    chip.querySelector(".zp").textContent = Math.round(s*100) + "%"; grain(); };
+  // the paper grain is noise in drawing units: zoomed, it would blow up into blotches, so its frequency rises with the
+  // zoom and it stays the same fine grain on screen (the filter is rebuilt on resize, so this re-applies then too)
+  const grain = () => { const fl = document.getElementById("hand"); if (!fl) return;
+    const ts = [...fl.querySelectorAll("feTurbulence")]; if (!ts.length) return;
+    const g = ts.find(t => t.getAttribute("result") === "n1") || ts.reduce((a, b) => parseFloat(b.getAttribute("baseFrequency")) > parseFloat(a.getAttribute("baseFrequency")) ? b : a);
+    if (!g.dataset.f0) g.dataset.f0 = g.getAttribute("baseFrequency");
+    const v = (parseFloat(g.dataset.f0) * s).toFixed(4); if (g.getAttribute("baseFrequency") !== v) g.setAttribute("baseFrequency", v); };
+  const fd = document.getElementById("fdefs"); if (fd) new MutationObserver(() => grain()).observe(fd, { childList: true, subtree: true });
+  const zoomAt = (k, px, py) => { const s2 = Math.min(5, Math.max(1, s*k)); tx = px - (px - tx)*s2/s; ty = py - (py - ty)*s2/s; s = s2; apply(); };
+  const local = e => { const r = wrap.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  wrap.addEventListener("wheel", e => {
+    if (e.ctrlKey || e.metaKey){ e.preventDefault(); const [x, y] = local(e); zoomAt(Math.exp(-Math.max(-50, Math.min(50, e.deltaY))*.006), x, y);   /* a wheel notch ~1.35x, a pinch stays smooth */ }
+    else if (s > 1){ e.preventDefault(); tx -= e.deltaX; ty -= e.deltaY; apply(); } }, { passive: false });
+  const center = () => { const { w, h } = box(); return [w/2, h/2]; };
+  chip.querySelector(".zi").onclick = () => zoomAt(1.5, ...center());
+  chip.querySelector(".zm").onclick = () => zoomAt(1/1.5, ...center());
+  chip.querySelector(".zp").onclick = () => { s = 1; apply(); };
+  chip.addEventListener("pointerdown", e => e.stopPropagation());
+  // two fingers: pinch to zoom and move to pan; the figure's own one-finger turn waits while they are down
+  const pts = new Map(); let pinch = null;
+  const two = () => { const [a, b] = [...pts.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x)/2, y: (a.y + b.y)/2 }; };
+  wrap.addEventListener("pointerdown", e => { if (e.pointerType !== "touch") return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2){ pinch = two(); e.stopPropagation(); } }, true);
+  wrap.addEventListener("pointermove", e => { if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size === 2){ e.stopPropagation(); e.preventDefault(); const n = two(), r = wrap.getBoundingClientRect();
+      tx += n.x - pinch.x; ty += n.y - pinch.y; zoomAt(n.d / pinch.d, n.x - r.left, n.y - r.top); pinch = n; } }, true);
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+  wrap.addEventListener("pointerup", up, true); wrap.addEventListener("pointercancel", up, true);
+  addEventListener("resize", apply);
+})();</script><style>.toast{position:absolute!important;left:50%!important;right:auto!important;top:6%!important;bottom:auto!important;z-index:4!important;
+  transform:translate(-50%,8px)!important;opacity:0!important;pointer-events:none!important;display:flex!important;align-items:center;gap:8px;
+  width:max-content;max-width:min(86%,440px);white-space:normal!important;font:600 12.5px/1.35 ui-monospace,Menlo,monospace!important;
+  letter-spacing:.01em!important;text-transform:none!important;color:#231e16!important;background:#fff1bf!important;
+  border:1px solid rgba(35,30,22,.28)!important;border-radius:8px!important;box-shadow:0 8px 22px rgba(35,30,22,.16)!important;
+  padding:7px 13px 7px 9px!important;transition:opacity .18s ease,transform .18s ease!important}
+.toast::before{content:"!";flex:none;width:17px;height:17px;border-radius:50%;background:#231e16;color:#fff1bf;font:800 11px/17px ui-monospace,Menlo,monospace;text-align:center}
+.toast.show{opacity:1!important;transform:translate(-50%,0)!important}</style>
+<script>(() => { const cap = () => { const t = document.getElementById("toast"); if (!t) return; const s = t.textContent;
+  if (s && s[0] !== s[0].toUpperCase()) t.textContent = s[0].toUpperCase() + s.slice(1); };
+  let seen = null; const watch = () => { const t = document.getElementById("toast"); if (!t || t === seen) return; seen = t;
+    const zw = document.querySelector(".zwrap"); if (zw && t.parentNode !== zw) zw.appendChild(t);   // sits on the figure itself
+    new MutationObserver(cap).observe(t, { childList: true, characterData: true, subtree: true }); cap(); };
+  watch(); const st = document.querySelector(".stage"); if (st) new MutationObserver(watch).observe(st, { childList: true }); })();</script><script>(() => { const fix = () => { const art = document.getElementById('art'); if (!art) return;
+    for (const el of art.querySelectorAll('[fill="#41538f" i]')){ let top = null, a = el.parentElement;
+      while (a && a !== art){ const o = a.getAttribute('opacity'); if (o !== null && +o < 1) top = a; a = a.parentElement; }
+      if (top) top.parentNode.insertBefore(el, top); } };
+  const go = () => { const art = document.getElementById('art'); if (!art) return setTimeout(go, 50); fix(); new MutationObserver(fix).observe(art, { childList: true }); };
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', go); else go(); })();</script><style>.lgd{display:none}@media (max-width:560px){html:not(.nolabels) .lgd.has{display:grid}}
+.lgd{grid-template-columns:1fr 1fr;gap:2px 8px;margin:4px 0 12px;font:700 10.5px/1.25 ui-monospace,Menlo,monospace;letter-spacing:.03em;color:#231e16}
+.lgd button{all:unset;display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px;border-radius:7px;-webkit-tap-highlight-color:transparent}
+.lgd b{flex:none;min-width:17px;height:17px;padding:0 3px;box-sizing:border-box;border-radius:999px;border:1.2px solid #231e16;background:#fff4d6;text-align:center;font:800 10px/15px ui-monospace,Menlo,monospace}
+.lgd .on b{background:var(--accent,#f4b829)}.lgd .sel{background:rgba(35,30,22,.09)}.lgd .sel b{background:#231e16;color:#fff4d6}</style>
+<script>(() => { const fig = document.getElementById("fig"); if (!fig) return;
+  const lg = document.createElement("div"); lg.className = "lgd"; const at = document.querySelector(".zwrap") || fig; at.parentNode.insertBefore(lg, at.nextSibling);
+  const hs = document.createElement("style"); document.head.appendChild(hs);
+  let sig = "", sel = 0, q = 0, names = "", num = new Map();
+  // the figure's own numbers count every label it has ever drawn; here they are reset to 1, 2, 3... down the left
+  // column then the right, each time the set of labels changes (so they hold still while the figure turns)
+  const renum = () => { if (innerWidth > 560) return; const gs = [...fig.querySelectorAll(".tag[data-t]")];
+    const key = gs.map(g => g.dataset.t).sort().join("|");
+    if (key !== names){ names = key; num = new Map(); const vb = fig.viewBox.baseVal, cx = vb.x + vb.width/2;
+      const at = g => { const r = g.querySelector("rect"); return r ? [+r.getAttribute("x") + r.getAttribute("width")/2, +r.getAttribute("y")] : [0, 0]; };
+      gs.map(g => [g.dataset.t, ...at(g)]).sort((a, b) => ((a[1] > cx) - (b[1] > cx)) || a[2] - b[2]).forEach(([t]) => { if (!num.has(t)) num.set(t, num.size + 1); }); }
+    for (const g of gs){ const n = String(num.get(g.dataset.t)); if (g.dataset.n !== n){ g.dataset.n = n; const t = g.querySelector("text"); if (t) t.textContent = n; } } };
+  const mark = () => { hs.textContent = sel ? `#fig .tag[data-n="${sel}"] rect{fill:#231e16!important}#fig .tag[data-n="${sel}"] text{fill:#fff4d6}#fig .tag[data-n="${sel}"] path{stroke-width:2.4}` : "";
+    for (const x of lg.children) x.classList.toggle("sel", +x.dataset.n === sel); };
+  const upd = () => { q = 0; const m = new Map();
+    if (innerWidth <= 560) for (const g of fig.querySelectorAll(".tag[data-n]")){ const n = +g.dataset.n; if (!m.has(n)) m.set(n, [g.dataset.t, g.classList.contains("on")]); }
+    const a = [...m].sort((x, y) => x[0] - y[0]), s = JSON.stringify(a); if (s === sig) return; sig = s;
+    lg.classList.toggle("has", a.length > 0);
+    lg.innerHTML = a.map(([n, [t, on]]) => `<button data-n="${n}" class="${on ? "on" : ""}"><b>${n}</b><span>${t}</span></button>`).join(""); mark(); };
+  lg.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; sel = sel === +b.dataset.n ? 0 : +b.dataset.n; mark(); });
+  new MutationObserver(() => { renum(); if (!q) q = requestAnimationFrame(upd); }).observe(fig, { childList: true, subtree: true }); renum();
+  addEventListener("resize", () => { if (!q) q = requestAnimationFrame(upd); }); upd(); })();</script></body></html>
