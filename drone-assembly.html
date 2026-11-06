@@ -865,6 +865,9 @@ const DD_ALU = { l:'#f0d27a', m:'#d9b04a', d:'#9c7a26' };
 const DD_PCB_E = matOf('#3f8f5a'), DD_PCB_F = matOf('#4b4f9e'), DD_CHIP = matOf('#2b2826');
 const DD_COPPER = matOf('#e0a35a'), DD_RUBBER = matOf('#3a3632'), DD_SILVER = { l:'#eef0f0', m:'#c6ccce', d:'#8f989b' };
 const DD_GREY = matOf('#d9d6cc'), DD_WHITE = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
+// VR: while this is on, every helper also hands back its world-space geometry (schema in vr/CONTRACT.md). The
+// pages never set it, so nothing extra is computed and the SVG they draw is byte for byte what it always was.
+let DD_VR = false;
 
 function ddXF(p){
   let x = p[0], y = p[1], z = p[2] - DD_T.zc;
@@ -880,12 +883,32 @@ const ddNormal = q => { let nx = 0, ny = 0, nz = 0;
   for (let i = 0; i < q.length; i++){ const a = q[i], b = q[(i+1) % q.length]; nx += (a[1]-b[1])*(a[2]+b[2]); ny += (a[2]-b[2])*(a[0]+b[0]); nz += (a[0]-b[0])*(a[1]+b[1]); }
   return norm([nx, ny, nz]); };
 
+/* ---------- vr: the same geometry as world-space polygons (all of this is inert while DD_VR is false) ---------- */
+// lofted quads between two world-space rings, turned the way core.js loft() turns them: away from the band's centre,
+// so a face shades in VR exactly as the same face shades in the SVG
+function ddQuads(A, B){
+  const cen = avg([...A, ...B]);
+  return A.map((a0, i) => { const j = (i + 1) % A.length, q = [a0, A[j], B[j], B[i]];
+    return dot(ddNormal(q), sub(avg(q), cen)) < 0 ? q.slice().reverse() : q; });
+}
+// a cap polygon turned so its normal points along n, which is the direction the SVG shaded that cap from
+const ddCap = (q, n) => dot(ddNormal(q), n) < 0 ? q.slice().reverse() : q;
+// one part out of several: svg in argument order (so the bytes cannot move), every point, and one vr payload.
+// several solids become one face soup keeping the first mat/shade/w/sil; a merge that leads with a wire keeps the wire
+function ddCat(...sols){
+  const v = sols.map(s => s.vr).filter(Boolean), first = v[0] || null;
+  const faces = first && first.kind === 'solid' ? v.flatMap(x => x.kind === 'solid' ? x.faces : []) : null;
+  return { svg: sols.map(s => s.svg).join(''), pts: sols.flatMap(s => s.pts), vr: first ? (faces ? { ...first, faces } : first) : null };
+}
+
 /* ---------- solids (local coords in, {svg, pts} out, pts in world coords) ---------- */
 function ddSolid(faces, m, w = .8, sil = 1.2){
   const F = faces.map(q => q.map(ddXF)), all = F.flat(), c = avg(all);
-  let s = '';
-  for (const q of F){ let n = ddNormal(q); if (dot(n, sub(avg(q), c)) < 0) n = n.map(v => -v); if (vis(n)) s += shape(q, toneI(n, m), w); }
-  return { svg: s + (sil ? hullInk(all, sil) : ''), pts: all };
+  let s = ''; const V = DD_VR ? [] : null;
+  for (const q of F){ let n = ddNormal(q); if (dot(n, sub(avg(q), c)) < 0) n = n.map(v => -v); if (vis(n)) s += shape(q, toneI(n, m), w);
+    if (V) V.push(ddCap(q, n)); }   // vr keeps the winding the SVG shaded from, so both sides pick the same tone
+  return { svg: s + (sil ? hullInk(all, sil) : ''), pts: all,
+    vr: DD_VR ? { kind: 'solid', faces: V, mat: m, shade: 'in', w, sil } : null };
 }
 function ddPrism(poly, z0, z1, m, w = .8, sil = 1.2){
   const n = poly.length, faces = [poly.map(([x, y]) => [x, y, z0]), poly.map(([x, y]) => [x, y, z1])];
@@ -893,9 +916,21 @@ function ddPrism(poly, z0, z1, m, w = .8, sil = 1.2){
   return ddSolid(faces, m, w, sil);
 }
 const ddBox = (x0, y0, z0, x1, y1, z1, m, w = .8, sil = 1.1) => ddPrism([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], z0, z1, m, w, sil);
+// a rod's two rings as world-space quads plus end caps, on rod()'s own ring math
+function ddTube(A, B, r, r1, n, m, w){
+  const d = norm(sub(B, A)), u = norm(cross(d, Math.abs(d[2]) < .9 ? [0, 0, 1] : [1, 0, 0])), v = cross(d, u);
+  const ring = (p, rr) => Array.from({ length: n }, (_, i) => { const t = i/n*2*Math.PI, c = Math.cos(t)*rr, s2 = Math.sin(t)*rr;
+    return [p[0] + u[0]*c + v[0]*s2, p[1] + u[1]*c + v[1]*s2, p[2] + u[2]*c + v[2]*s2]; });
+  const R0 = ring(A, r), R1 = ring(B, r1);
+  const faces = r1 > 0 ? ddQuads(R0, R1) : R0.map((p, i) => [p, R0[(i + 1) % n], B]);   // a tapered part ends in a point
+  if (r > 0) faces.push(ddCap(R0, d.map(x => -x)));
+  if (r1 > 0) faces.push(ddCap(R1, d));
+  return { kind: 'solid', faces, mat: m, shade: 'in', w: .7, sil: w };
+}
 function ddRod(a, b, r, m, w = .9, r1 = r, n = 14){
   const A = ddXF(a), B = ddXF(b), e = Math.max(r, r1);
-  return { svg: rod(A, B, r, m, toneI, w, r1, n), pts: [A, B, ...[[e,0,0],[-e,0,0],[0,e,0],[0,-e,0],[0,0,e],[0,0,-e]].flatMap(d => [A.map((v, i) => v + d[i]), B.map((v, i) => v + d[i])])] };
+  return { svg: rod(A, B, r, m, toneI, w, r1, n), pts: [A, B, ...[[e,0,0],[-e,0,0],[0,e,0],[0,-e,0],[0,0,e],[0,0,-e]].flatMap(d => [A.map((v, i) => v + d[i]), B.map((v, i) => v + d[i])])],
+    vr: DD_VR ? ddTube(A, B, r, r1, n, m, w) : null };
 }
 const ddCyl = (x, y, z0, z1, r, m, w = .9, n = 16) => ddRod([x, y, z0], [x, y, z1], r, m, w, r, n);
 // a body swept along x between two (y, z) outlines (rounded shells, noses); ends capped
@@ -904,17 +939,19 @@ function ddSweep(prof0, x0, prof1, x1, m, w = 1.4){
   let s = loft(A, B, nr => tone(nr, m));
   const ax = norm(sub(avg(B), avg(A)));
   for (const [R, d] of [[A, ax.map(v => -v)], [B, ax]]) if (vis(d)) s += shape(R, tone(d, m), 1);
-  return { svg: s + hullInk([...A, ...B], w), pts: [...A, ...B] };
+  return { svg: s + hullInk([...A, ...B], w), pts: [...A, ...B],
+    vr: DD_VR ? { kind: 'solid', faces: [...ddQuads(A, B), ddCap(A, ax.map(v => -v)), ddCap(B, ax)], mat: m, shade: 'out', w: .7, sil: w } : null };
 }
 // a dome (canopy) on a ring: radius r, height h, centred (x, y) at z0
 function ddDome(x, y, z0, r, h, m){
   const rings = [0, .35, .65, .88, 1].map(t => { const a = t*Math.PI/2; return ellUV(x, y, r*Math.cos(a) + .01, r*Math.cos(a) + .01, 20).map(([u, v]) => ddXF([u, v, z0 + h*Math.sin(a)])); });
   let s = ''; for (let i = 0; i < rings.length - 1; i++) s += loft(rings[i], rings[i+1], nr => tone(nr, m));
-  return { svg: s + hullInk(rings.flat(), 1.6), pts: rings.flat() };
+  return { svg: s + hullInk(rings.flat(), 1.6), pts: rings.flat(),
+    vr: DD_VR ? { kind: 'solid', faces: rings.slice(0, -1).flatMap((R, i) => ddQuads(R, rings[i + 1])), mat: m, shade: 'out', w: .7, sil: 1.6 } : null };
 }
 // a ball: two domes back to back (the sensor turret under a nose)
 const ddBall = (x, y, z, r, m) => { const u = ddDome(x, y, z, r, r, m), d = ddDome(x, y, z, r, -r, m);
-  return { svg: u.svg + d.svg, pts: [...u.pts, ...d.pts] }; };
+  return ddCat(u, d); };
 // a slab between two copies of an [x, z] outline, extruded from y0 to y1 (fins, gear plates, flat brackets)
 function ddSlab(poly, y0, y1, m, w = .9){
   const A = poly.map(([x, z]) => [x, y0, z]), B = poly.map(([x, z]) => [x, y1, z]), faces = [A, B];
@@ -925,7 +962,8 @@ function ddSlab(poly, y0, y1, m, w = .9){
 // a wire: an inked coloured line through local points
 function ddWire(pts, col, w = .9){
   const W = pts.map(ddXF), d = pd(W, false);
-  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w*2 + .9)}" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w*2)}" stroke-linejoin="round" stroke-linecap="round"/>`, pts: W };
+  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w*2 + .9)}" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w*2)}" stroke-linejoin="round" stroke-linecap="round"/>`, pts: W,
+    vr: DD_VR ? { kind: 'wire', pts: W, col, w } : null };
 }
 const dd2Rect = (x0, y0, x1, y1, r = 0) => r > 0 ? rrUV(x0, y0, x1, y1, r, 4) : rectUV(x0, y0, x1, y1);
 // an octagonal section: a box with its corners cut, which is what makes a moulded shell read as faceted
@@ -941,7 +979,7 @@ const dd2Arm = (a, r0, r1, w, pad) => { const c = Math.cos(a*Math.PI/180), s = M
 function ddProp(mx, my, zP, R, blades, dir, col, ang, speed, chord = 1){
   const M = matOf(col), hubR = Math.max(R*.09, 2.2);
   let s = '';
-  const pts = [];
+  const pts = [], faces = [];
   // spinning fast: a pale disc with faint blades; slow or still: solid twisted blades
   const blur = Math.min(1, speed*1.6);
   if (blur > .05){ const ring = ellUV(mx, my, R, R, 28).map(([u, v]) => ddXF([u, v, zP + 1.2]));
@@ -953,9 +991,11 @@ function ddProp(mx, my, zP, R, blades, dir, col, ang, speed, chord = 1){
     const q = [P2(r0, wr*.5, zP + 2.4), P2(R*.55, wr, zP + 2.2), P2(R, wt, zP + 1.6), P2(R, -wt*.6, zP + .9), P2(R*.55, -wr*.6, zP + .6), P2(r0, -wr*.4, zP + .5)].map(ddXF);
     let n = ddNormal(q); if (!vis(n)) n = n.map(v => -v);
     s += `<g opacity="${f(1 - .75*blur)}">` + shape(q, toneI(n, M), .8) + '</g>'; pts.push(...q);
+    if (DD_VR) faces.push(ddCap(q, [0, 0, 1]));   // a blade is already a polygon; the disc of a spinning one is not
   }
   const hub = ddCyl(mx, my, zP, zP + 3.2, hubR, M, .8, 12);
-  return { svg: s + hub.svg, pts: [...pts, ...hub.pts, ...ellUV(mx, my, R, R, 8).map(([u, v]) => ddXF([u, v, zP + 1]))] };
+  return { svg: s + hub.svg, pts: [...pts, ...hub.pts, ...ellUV(mx, my, R, R, 8).map(([u, v]) => ddXF([u, v, zP + 1]))],
+    vr: DD_VR ? { kind: 'solid', faces: [...faces, ...hub.vr.faces], mat: M, shade: 'in', w: .8, sil: .8 } : null };
 }
 function ddSpinArrow(mx, my, z, R, dir){
   const col = dir > 0 ? DD_CW : DD_CCW, a0 = dir > 0 ? 160 : 20, sweep = -dir*130, r = R*.62, n = 14;
@@ -964,12 +1004,13 @@ function ddSpinArrow(mx, my, z, R, dir){
   const end = arc[n], tip = [end[0] + tdir[0]*hl, end[1] + tdir[1]*hl, z], rad = [Math.cos(ae), Math.sin(ae)];
   const head = [tip, [end[0] + rad[0]*hw, end[1] + rad[1]*hw, z], [end[0] - rad[0]*hw, end[1] - rad[1]*hw, z]].map(ddXF);
   const W = arc.map(ddXF), d = pd(W, false);
-  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>` + shape(head, col, 1.1), pts: [...W, ...head] };
+  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>` + shape(head, col, 1.1), pts: [...W, ...head],
+    vr: DD_VR ? { kind: 'wire', pts: W, col, w: 1 } : null };   // a part carries one primitive: the arc is the cue
 }
 function ddThrust(mx, my, z, R, k){
   const len = R*1.15*k, r = Math.max(1.4, R*.045);
   const shaft = ddRod([mx, my, z], [mx, my, z + len], r, matOf('#f4b829'), .9), head = ddRod([mx, my, z + len], [mx, my, z + len + r*5], r*2.6, matOf('#f4b829'), 1, 0);
-  return { svg: shaft.svg + head.svg, pts: [...shaft.pts, ...head.pts] };
+  return ddCat(shaft, head);
 }
 
 /* ---------- the model: every part as a byDepth item tagged with its build step and kind ---------- */
@@ -986,7 +1027,7 @@ function ddModel(D, opt){
     let svg = sol.svg; if (cur.v < 1) svg = `<g opacity="${f(Math.min(1, cur.v*2))}">${svg}</g>`;
     const nm = (D.partText && D.partText[key]) || DL_PARTS[key] || [key.toUpperCase(), ''];
     svg = `<g data-act="part" data-k="${key}" class="pt${opt.sel === key ? ' selp' : ''}"><title>${nm[0]}: ${nm[1]}</title>${svg}</g>`;
-    items.push({ box: box3, svg, key, step: cur.i, cover: !!flags.cover, inner: !!flags.inner });
+    items.push({ box: box3, svg, key, step: cur.i, cover: !!flags.cover, inner: !!flags.inner, vr: sol.vr || null });
     if (!labels[key] && cur.v >= 1) labels[key] = flags.at ? ddXF(flags.at) : boxMid(box3); };
   const motors = g.motors.map((m, i) => ({ ...m, ...(g.pos ? { x: g.pos[i][0], y: g.pos[i][1] } : { x: g.arm*Math.cos(m.a*Math.PI/180), y: g.arm*Math.sin(m.a*Math.PI/180) }) }));
   // spin / speed / arrows are handed to the style too: a helicopter draws its tail rotor, so it needs the same phase
@@ -999,7 +1040,7 @@ function ddModel(D, opt){
     const z0 = m.z0 != null ? m.z0 : st.zMotor, R = g.motorR, h = g.motorH || R*1.2;
     const base = ddCyl(m.x, m.y, z0, z0 + R*.22, R*.86, DD_CHIP, .8, 16), bel = ddCyl(m.x, m.y, z0 + R*.22, z0 + R*.22 + h, R, bell, 1, 18);
     const shaft = ddCyl(m.x, m.y, z0 + R*.22 + h, (m.zP != null ? m.zP : st.zP) + 3, Math.max(1, R*.13), DD_SILVER, .7, 10);
-    add('motor', { svg: base.svg + bel.svg + shaft.svg, pts: [...base.pts, ...bel.pts, ...shaft.pts] }, { at: [m.x, m.y, z0 + h] });
+    add('motor', ddCat(base, bel, shaft), { at: [m.x, m.y, z0 + h] });
     shadow.push(ddXF([m.x, m.y, z0 + h]));
   });
   if (opt.arrows && opt.show(DD_STEP_I.motors) >= 1) motors.forEach(m => {
@@ -1007,7 +1048,7 @@ function ddModel(D, opt){
     // a rotor with a huge disc draws its arrow close in: a full-size arc reads as a stray cable, not a spin cue
     const aR = m.arrowR || g.propR;
     const a = ddSpinArrow(m.x, m.y, zP + aR*.14 + 4, aR, m.dir);
-    items.push({ box: ddBB(a.pts), svg: `<g class="spin">${a.svg}</g>`, key: 'arrow', step: -1 }); });
+    items.push({ box: ddBB(a.pts), svg: `<g class="spin">${a.svg}</g>`, key: 'arrow', step: -1, vr: a.vr || null }); });
   if (step('props')) motors.forEach((m, i) => {
     if (m.noProp) return;   // a style that draws its own blades (a helicopter's rotor) opts out here
     const zP = m.zP != null ? m.zP : st.zP, sp = (opt.speeds && opt.speeds[i]) || 0;
@@ -1015,7 +1056,7 @@ function ddModel(D, opt){
   });
   if (opt.thrust) motors.forEach((m, i) => { DD_DZ = [0, 0, 0];
     const zP = m.zP != null ? m.zP : st.zP, tR = m.thrustR || g.propR, t = ddThrust(m.x, m.y, zP + 5, tR, opt.thrust[i]);
-    items.push({ box: ddBB(t.pts), svg: t.svg, key: 'thrust', step: -1 }); });
+    items.push({ box: ddBB(t.pts), svg: t.svg, key: 'thrust', step: -1, vr: t.vr || null }); });
   DD_DZ = [0, 0, 0];
   return { items, labels, shadow, top: st.top, motors, zP: st.zP };
 }
@@ -1041,13 +1082,13 @@ function ddXPlate(D, g, st, step, add, shadow){
   if (step('esc')){
     for (const sx of [-s2, s2]) for (const sy of [-s2, s2]) add('standoff', ddCyl(sx - 4, sy, zC, zF + 2, 1.5, DD_GREY, .6, 8));
     const esc = ddBox(-bw - 4, -bw, zE, bw - 4, bw, zE + 1.6, DD_PCB_E, .8, 1);
-    let svg = esc.svg; for (let i = 0; i < 4; i++) for (const sy of [-9, 5]) svg += ddBox(-14 - 4 + i*7, sy, zE + 1.6, -10 - 4 + i*7, sy + 4, zE + 3, DD_CHIP, .5, .6).svg;
-    add('esc', { svg, pts: esc.pts }, { inner: true, at: [bw - 4, bw, zE + 1] });
+    const chips = []; for (let i = 0; i < 4; i++) for (const sy of [-9, 5]) chips.push(ddBox(-14 - 4 + i*7, sy, zE + 1.6, -10 - 4 + i*7, sy + 4, zE + 3, DD_CHIP, .5, .6));
+    add('esc', { ...ddCat(esc, ...chips), pts: esc.pts }, { inner: true, at: [bw - 4, bw, zE + 1] });
   }
   if (step('fc')){
     const fc = ddBox(-bw - 4, -bw, zF, bw - 4, bw, zF + 1.6, DD_PCB_F, .8, 1);
     const mcu = ddBox(-9, -6, zF + 1.6, 3, 6, zF + 3, DD_CHIP, .5, .6), usb = ddBox(-8, bw - 1, zF + 1.6, 0, bw + 1.5, zF + 4.6, DD_SILVER, .5, .6);
-    add('fc', { svg: fc.svg + mcu.svg + usb.svg, pts: fc.pts }, { inner: true, at: [-bw - 4, -bw, zF + 1] });
+    add('fc', { ...ddCat(fc, mcu, usb), pts: fc.pts }, { inner: true, at: [-bw - 4, -bw, zF + 1] });
     add('gyro', ddBox(6, -bw + 4, zF + 1.6, 10, -bw + 8, zF + 2.8, matOf('#d8d8d8'), .5, .6), { inner: true });
   }
   const zV = zF + 3.6, rear = -L/2;
@@ -1055,7 +1096,7 @@ function ddXPlate(D, g, st, step, add, shadow){
     const cam = ddBox(L/2 - 21, -9.5, zC + 5, L/2 - 2, 9.5, zC + 24, DD_CHIP, .8, 1.1);
     const tilt = 25*Math.PI/180, lc = [L/2 - 2, 0, zC + 14.5], lens = ddRod(lc, [lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], 7, DD_CHIP, .9, 6.4);
     const glass = ddRod([lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], [lc[0] + 9.6*Math.cos(tilt), 0, lc[2] + 9.6*Math.sin(tilt)], 4.6, matOf('#4b6b9a'), .6);
-    add('camera', { svg: cam.svg + lens.svg + glass.svg, pts: [...cam.pts, ...lens.pts] });
+    add('camera', { ...ddCat(cam, lens, glass), pts: [...cam.pts, ...lens.pts] });
     add('vtx', ddBox(-14 - 4, -13, zV, 14 - 4, 13, zV + 4, matOf('#3a3f45'), .8, 1), { inner: true });
     add('rx', ddBox(rear + 6, -5, zC, rear + 18, 5, zC + 2, DD_PCB_E, .6, .8), { inner: true });
     for (const s of [-1, 1]) add('antenna', ddRod([rear + 6, 3*s, zC + 1], [rear - 22, 16*s, zC + 10], 1, DD_WHITE, .7), { at: [rear - 20, 15*s, zC + 9] });
@@ -1078,7 +1119,7 @@ function ddXPlate(D, g, st, step, add, shadow){
     if (g.action){
       add('action', ddBox(L/2 - 34, -4, T0 + 2.5, L/2 - 4, 4, T0 + 8, pal, .7, .9), { cover: true });
       const ac = ddBox(L/2 - 32, -35, T0 + 8, L/2 - 4, 35, T0 + 54, DD_CHIP, .9, 1.4), lens = ddRod([L/2 - 4, 18, T0 + 34], [L/2 + 4, 18, T0 + 34], 10, DD_CHIP, 1);
-      add('action', { svg: ac.svg + lens.svg, pts: [...ac.pts, ...lens.pts] }, { cover: true });
+      add('action', ddCat(ac, lens), { cover: true });
     }
     if (g.gps){ add('gps', ddBox(rear - 2, -14, T0 + 2.5, rear + 24, 14, T0 + 10, matOf('#2f3640'), .8, 1)); }
   }
@@ -1088,7 +1129,7 @@ function ddXPlate(D, g, st, step, add, shadow){
     let svg = b.svg;
     if (!DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw2/2 + .3 : -bw2/2 - .3;
       svg += vis([0, sy > 0 ? 1 : -1, 0]) ? ddLabelY((x0 + x1)/2, sy, z0 + bh/2 - 3, g.cells, 9) : ''; }
-    add('battery', { svg, pts: b.pts }, { cover: true, at: [x0 + 6, bw2/2, z0 + bh*.7] });
+    add('battery', { ...b, svg }, { cover: true, at: [x0 + 6, bw2/2, z0 + bh*.7] });
     const sx = (x0 + x1)/2;
     add('strap', ddPrism(dd2Rect(sx - 7, -bw2/2 - 1.2, sx + 7, bw2/2 + 1.2), z0 + bh, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
     for (const s of [-1, 1]) add('strap', ddBox(sx - 7, s > 0 ? bw2/2 : -bw2/2 - 1.2, z0, sx + 7, s > 0 ? bw2/2 + 1.2 : -bw2/2, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
@@ -1141,7 +1182,7 @@ function ddDuct(D, g, st, step, add, shadow){
   if (step('camera')){
     const cz = zp1 + (wh ? 2 : 3), cam = ddBox(camX - cs*1.2, -cs, cz, camX, cs, cz + cs*2, DD_CHIP, .8, 1.1);
     const tilt = (D.fly.uptilt || 0)*Math.PI/180, lc = [camX, 0, cz + cs], lens = ddRod(lc, [camX + cs*.8*Math.cos(tilt), 0, cz + cs + cs*.8*Math.sin(tilt)], cs*.65, DD_CHIP, .9);
-    add('camera', { svg: cam.svg + lens.svg, pts: [...cam.pts, ...lens.pts] });
+    add('camera', ddCat(cam, lens));
     if (!wh) add('vtx', ddBox(-L/2 + 8, -15, zF + 2.5, 10, 15, zF + 10, matOf('#d9d6cc'), .8, 1), { inner: true });
     for (const s of wh ? [0] : [-1, 1]) add('antenna', ddRod([-L/2 + 4, 6*s, zp1 + 6], [-L/2 - (wh ? 14 : 22), 12*s, zp1 + (wh ? 10 : 22)], wh ? .5 : 1.4, DD_WHITE, .7));
   }
@@ -1161,7 +1202,7 @@ function ddDuct(D, g, st, step, add, shadow){
     const z0 = wh ? zp0 - bh : zF + 13, b = ddBox(-bl/2 - (wh ? 0 : 4), -bw2/2, z0, bl/2 - (wh ? 0 : 4), bw2/2, z0 + bh, matOf('#3f9fd8'), 1, 1.6);
     let svg = b.svg;
     if (!wh && !DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw2/2 + .3 : -bw2/2 - .3; svg += ddLabelY(-4, sy, z0 + bh/2 - 3, g.cells, 8); }
-    add('battery', { svg, pts: b.pts }, { cover: !wh, at: [bl/2 - 6, bw2/2, z0 + bh*.6] });
+    add('battery', { ...b, svg }, { cover: !wh, at: [bl/2 - 6, bw2/2, z0 + bh*.6] });
     if (!wh) add('strap', ddPrism(dd2Rect(-11, -bw2/2 - 1, 3, bw2/2 + 1), z0 + bh, z0 + bh + 1.2, matOf('#e2483d'), .7, .9), { cover: true });
     st.top = Math.max(st.top, z0 + bh);
   }
@@ -1192,16 +1233,16 @@ function ddShell(D, g, st, step, add, shadow){
   if (step('esc')) add('esc', ddBox(-6, -22, 13, 44, 22, 14.6, DD_PCB_E, .8, 1), { inner: true });
   if (step('fc')){
     const b = ddBox(-4, -24, 26, 52, 24, 27.6, DD_PCB_F, .8, 1), soc = ddBox(14, -9, 27.6, 30, 9, 29.4, DD_CHIP, .5, .6);
-    add('fc', { svg: b.svg + soc.svg, pts: b.pts }, { inner: true, at: [52, 24, 27] });
+    add('fc', { ...ddCat(b, soc), pts: b.pts }, { inner: true, at: [52, 24, 27] });
     add('gyro', ddBox(36, -4, 27.6, 40, 0, 28.8, matOf('#d8d8d8'), .5, .6), { inner: true });
   }
   if (step('camera')){
     const br = ddBox(XN - 6, -6, 12, XN + 2, 6, 22, matOf('#c9c4b6'), .8, 1), roll = ddRod([XN + 2, 0, 17], [XN + 8, 0, 17], 7, DD_CHIP, .9);
-    add('gimbal', { svg: br.svg + roll.svg, pts: [...br.pts, ...roll.pts] }, { at: [XN + 6, 7, 17] });
+    add('gimbal', ddCat(br, roll), { at: [XN + 6, 7, 17] });
     add('gimbal', ddBox(XN + 8, -17, 6, XN + 12, -13, 24, DD_CHIP, .8, 1));
     add('gimbal', ddRod([XN + 16, -19, 15], [XN + 16, -13, 15], 6, DD_CHIP, .9));
     const head = ddBox(XN + 12, -12, 5, XN + 30, 12, 25, DD_CHIP, .9, 1.3), lens = ddRod([XN + 30, 0, 15], [XN + 34, 0, 15], 7, DD_CHIP, .9), gl = ddRod([XN + 34, 0, 15], [XN + 34.6, 0, 15], 4.8, matOf('#4b6b9a'), .6);
-    add('camera', { svg: head.svg + lens.svg + gl.svg, pts: [...head.pts, ...lens.pts] });
+    add('camera', { ...ddCat(head, lens, gl), pts: [...head.pts, ...lens.pts] });
     add('gps', ddBox(-60, -13, 46, -34, 13, 50, matOf('#c9a45a'), .7, .9), { inner: true });
     for (const s of [-1, 1]) add('antenna', ddRod([88, 104*s, 24], [88, 104*s, 6], 1.2, matOf('#7a7a7a'), .6), { inner: true });
   }
@@ -1217,7 +1258,7 @@ function ddShell(D, g, st, step, add, shadow){
   if (step('battery')){
     const b = ddBox(X0 - 1, -24, 13, -6, 24, 33, matOf('#4a4a4a'), 1, 1.4);
     let svg = b.svg; if (vis([-1, 0, 0])) svg += shape([[X0 - 1.2, -6, 20], [X0 - 1.2, 6, 20], [X0 - 1.2, 6, 26], [X0 - 1.2, -6, 26]].map(ddXF), '#8af0ae', .5);
-    add('battery', { svg, pts: b.pts }, { inner: true, at: [X0, 20, 28] });
+    add('battery', { ...b, svg }, { inner: true, at: [X0, 20, 28] });
   }
   if (step('frame')) shadow.push(...[[X0, -31, 34], [X1, 31, 34], [X0, 31, 34], [X1, -31, 34], [XN, 0, 30]].map(ddXF));
   st.top = 60;
@@ -1249,13 +1290,13 @@ function ddStrike(D, g, st, step, add, shadow){
   if (step('esc')){
     for (const sx of [-s2, s2]) for (const sy of [-s2, s2]) add('standoff', ddCyl(sx - 4, sy, zC, zF + 2, 1.6, DD_GREY, .6, 8));
     const esc = ddBox(-bw - 4, -bw, zE, bw - 4, bw, zE + 1.6, DD_PCB_E, .8, 1);
-    let svg = esc.svg; for (let i = 0; i < 4; i++) for (const sy of [-9, 5]) svg += ddBox(-14 - 4 + i*7, sy, zE + 1.6, -10 - 4 + i*7, sy + 4, zE + 3, DD_CHIP, .5, .6).svg;
-    add('esc', { svg, pts: esc.pts }, { inner: true, at: [bw - 4, bw, zE + 1] });
+    const chips = []; for (let i = 0; i < 4; i++) for (const sy of [-9, 5]) chips.push(ddBox(-14 - 4 + i*7, sy, zE + 1.6, -10 - 4 + i*7, sy + 4, zE + 3, DD_CHIP, .5, .6));
+    add('esc', { ...ddCat(esc, ...chips), pts: esc.pts }, { inner: true, at: [bw - 4, bw, zE + 1] });
   }
   if (step('fc')){
     const fc = ddBox(-bw - 4, -bw, zF, bw - 4, bw, zF + 1.6, DD_PCB_F, .8, 1);
     const mcu = ddBox(-9, -6, zF + 1.6, 3, 6, zF + 3, DD_CHIP, .5, .6), usb = ddBox(-8, bw - 1, zF + 1.6, 0, bw + 1.5, zF + 4.6, DD_SILVER, .5, .6);
-    add('fc', { svg: fc.svg + mcu.svg + usb.svg, pts: fc.pts }, { inner: true, at: [-bw - 4, -bw, zF + 1] });
+    add('fc', { ...ddCat(fc, mcu, usb), pts: fc.pts }, { inner: true, at: [-bw - 4, -bw, zF + 1] });
     add('gyro', ddBox(6, -bw + 4, zF + 1.6, 10, -bw + 8, zF + 2.8, matOf('#d8d8d8'), .5, .6), { inner: true });
   }
   const zV = zF + 3.6, rear = -L/2;
@@ -1264,7 +1305,7 @@ function ddStrike(D, g, st, step, add, shadow){
     const tilt = (D.fly.uptilt || 0)*Math.PI/180, lc = [L/2 - 2, 0, zC + 14.5];
     const lens = ddRod(lc, [lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], 7, DD_CHIP, .9, 6.4);
     const glass = ddRod([lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], [lc[0] + 9.6*Math.cos(tilt), 0, lc[2] + 9.6*Math.sin(tilt)], 4.6, matOf('#4b6b9a'), .6);
-    add('camera', { svg: cam.svg + lens.svg + glass.svg, pts: [...cam.pts, ...lens.pts] });
+    add('camera', { ...ddCat(cam, lens, glass), pts: [...cam.pts, ...lens.pts] });
     add('vtx', ddBox(-14 - 4, -13, zV, 14 - 4, 13, zV + 4, matOf('#3a3f45'), .8, 1), { inner: true });
     add('rx', ddBox(rear + 6, -5, zC, rear + 18, 5, zC + 2, DD_PCB_E, .6, .8), { inner: true });
     for (const s of [-1, 1]) add('antenna', ddRod([rear + 6, 3*s, zC + 1], [rear - 22, 16*s, zC + 10], 1, DD_WHITE, .7), { at: [rear - 20, 15*s, zC + 9] });
@@ -1289,7 +1330,7 @@ function ddStrike(D, g, st, step, add, shadow){
     // the payload pod, slung under the belly on two rails
     const body = ddBox(P.x0, -P.hy, P.z0, P.x1, P.hy, P.z1, matOf('#3f4750'), .9, 1.4);
     const nose = ddSweep(rrUV(-P.hy, P.z0, P.hy, P.z1, 8), P.x1, rrUV(-5, P.z0 + 7, 5, P.z1 - 6, 3), P.x1 + P.nose, DD_SILVER, 1.2);
-    add('payload', { svg: body.svg + nose.svg, pts: [...body.pts, ...nose.pts] }, { cover: true, at: [P.x0 + 14, 0, (P.z0 + P.z1)/2] });
+    add('payload', ddCat(body, nose), { cover: true, at: [P.x0 + 14, 0, (P.z0 + P.z1)/2] });
     // tail fins: two swept wings, one up, one down
     for (const s of [-1, 1]) add('fin', ddBox(P.x0, s > 0 ? P.hy : -P.hy - 3, P.z0 + 3, P.x0 + 18, s > 0 ? P.hy + 3 : -P.hy, P.z0 + 31, matOf('#c94f3d'), .7, .9));
     add('fin', ddBox(P.x0, -2.5, P.z1, P.x0 + 16, 2.5, P.z1 + 15, matOf('#c94f3d'), .7, .9));
@@ -1303,7 +1344,7 @@ function ddStrike(D, g, st, step, add, shadow){
     let svg = b.svg;
     if (!DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw2/2 + .3 : -bw2/2 - .3;
       svg += vis([0, sy > 0 ? 1 : -1, 0]) ? ddLabelY((x0 + x1)/2, sy, z0 + bh/2 - 3, g.cells, 9) : ''; }
-    add('battery', { svg, pts: b.pts }, { cover: true, at: [x0 + 6, bw2/2, z0 + bh*.7] });
+    add('battery', { ...b, svg }, { cover: true, at: [x0 + 6, bw2/2, z0 + bh*.7] });
     const sx = (x0 + x1)/2;
     add('strap', ddPrism(dd2Rect(sx - 7, -bw2/2 - 1.2, sx + 7, bw2/2 + 1.2), z0 + bh, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
     for (const s of [-1, 1]) add('strap', ddBox(sx - 7, s > 0 ? bw2/2 : -bw2/2 - 1.2, z0, sx + 7, s > 0 ? bw2/2 + 1.2 : -bw2/2, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
@@ -1338,7 +1379,7 @@ function ddRound(D, g, st, step, add, shadow){
     add('esc', ddPrism(dd2Rot(r*c, r*s, m.a, 74*k, 34*k), zt - 15*k, zt + 15*k, matOf('#4a5a7a'), .8, 1), { at: [r*c, r*s, zt + 15*k] }); });
   if (step('fc')){
     const fc = ddBox(-26*k, -22*k, G + 31*k, 26*k, 22*k, G + 61*k, matOf('#e8e4da'), .9, 1.2), stripe = ddBox(-26.3*k, -22.3*k, G + 52*k, 26.3*k, 22.3*k, G + 57*k, matOf('#f08a3c'), .6, 0);
-    add('fc', { svg: fc.svg + stripe.svg, pts: fc.pts }, { at: [26*k, 22*k, G + 55*k] });
+    add('fc', { ...ddCat(fc, stripe), pts: fc.pts }, { at: [26*k, 22*k, G + 55*k] });
     add('gps', ddRod([-.86*Rp, 0, G + 31*k], [-.86*Rp, 0, G + 180*k], 5*k, DD_CARBON, .9));
     add('gps', ddCyl(-.86*Rp, 0, G + 180*k, G + 196*k, 40*k, matOf('#2f3640'), 1.1, 20), { at: [-.86*Rp, 40*k, G + 192*k] });
   }
@@ -1351,10 +1392,10 @@ function ddRound(D, g, st, step, add, shadow){
       add('gimbal', ddRod([gx, sy*84*k, G - 120*k], [gx, sy*70*k, G - 120*k], 22*k, DD_CHIP, .9)); }
     if (g.gimbal === 'cine'){
       const cam = ddBox(gx - 70*k, -62*k, G - 172*k, gx + 70*k, 62*k, G - 70*k, matOf('#cf5038'), 1, 1.6), lens = ddRod([gx + 70*k, 0, G - 122*k], [gx + 140*k, 0, G - 122*k], 38*k, DD_CHIP, 1.1), gl = ddRod([gx + 140*k, 0, G - 122*k], [gx + 142*k, 0, G - 122*k], 28*k, matOf('#4b6b9a'), .7);
-      add('camera', { svg: cam.svg + lens.svg + gl.svg, pts: [...cam.pts, ...lens.pts] });
+      add('camera', { ...ddCat(cam, lens, gl), pts: [...cam.pts, ...lens.pts] });
     } else {
       const cam = ddBox(gx - 50*k, -55*k, G - 160*k, gx + 50*k, 55*k, G - 80*k, matOf('#e8e4da'), 1, 1.4), lens = ddRod([gx, 0, G - 160*k], [gx, 0, G - 190*k], 26*k, DD_CHIP, 1);
-      add('camera', { svg: cam.svg + lens.svg, pts: [...cam.pts, ...lens.pts] });
+      add('camera', ddCat(cam, lens));
     }
     add('rx', ddBox(.2*Rp, -.5*Rp, G + 31*k, .45*Rp, -.3*Rp, G + 39*k, matOf('#2f3640'), .7, .9));
     for (const s of [-1, 1]) add('antenna', ddRod([.1*Rp, s*.9*Rp, G + 4*k], [.1*Rp, s*.9*Rp, G - 70*k], 3*k, DD_WHITE, .7));
@@ -1402,12 +1443,12 @@ function ddBolt(D, g, st, step, add, shadow){
   }
   if (step('esc')){
     const esc = ddBox(-96, -48, Z.belly + 16, 58, 48, Z.belly + 18, DD_PCB_E, .8, 1);
-    let svg = esc.svg; for (let i = 0; i < 4; i++) svg += ddBox(-86 + i*26, -32, Z.belly + 18, -72 + i*26, -18, Z.belly + 23, DD_CHIP, .5, .6).svg;
-    add('esc', { svg, pts: esc.pts }, { inner: true, at: [58, 48, Z.belly + 18] });
+    const chips = []; for (let i = 0; i < 4; i++) chips.push(ddBox(-86 + i*26, -32, Z.belly + 18, -72 + i*26, -18, Z.belly + 23, DD_CHIP, .5, .6));
+    add('esc', { ...ddCat(esc, ...chips), pts: esc.pts }, { inner: true, at: [58, 48, Z.belly + 18] });
   }
   if (step('fc')){
     const fc = ddBox(-56, -40, Z.belly + 26, 66, 40, Z.belly + 28, DD_PCB_F, .8, 1);
-    add('fc', { svg: fc.svg + ddBox(-16, -12, Z.belly + 28, 6, 12, Z.belly + 31, DD_CHIP, .5, .6).svg, pts: fc.pts }, { inner: true, at: [66, 40, Z.belly + 28] });
+    add('fc', { ...ddCat(fc, ddBox(-16, -12, Z.belly + 28, 6, 12, Z.belly + 31, DD_CHIP, .5, .6)), pts: fc.pts }, { inner: true, at: [66, 40, Z.belly + 28] });
     add('gyro', ddBox(22, -7, Z.belly + 28, 30, 1, Z.belly + 30, matOf('#d8d8d8'), .5, .6), { inner: true });
     // the GPS puck and two radio antennas sit on the open deck aft of the module
     add('gps', ddBox(-266, -17, Z.deck, -228, 17, Z.deck + 9, matOf('#2f3640'), .8, 1), { at: [-247, 17, Z.deck + 9] });
@@ -1420,7 +1461,7 @@ function ddBolt(D, g, st, step, add, shadow){
     for (const s of [-1, 1]) add('gimbal', ddRod([gx - 34, 40*s, Z.belly + 2], [gx - 4, (gr - 6)*s, gz + 8], 7, DD_SILVER, .8));
     const lens = ddRod([gx + gr*.5, 0, gz], [gx + gr*.98, 0, gz], 26, matOf('#141312'), .9, 22);
     const gl = ddRod([gx + gr*.98, 0, gz], [gx + gr*1.02, 0, gz], 17, matOf('#4b6b9a'), .6);
-    add('camera', { svg: lens.svg + gl.svg, pts: lens.pts }, { at: [gx + gr, 0, gz] });
+    add('camera', { ...ddCat(lens, gl), pts: lens.pts }, { at: [gx + gr, 0, gz] });
   }
   if (step('wiring')){
     const cols = ['#e2483d', '#f4b829', '#3f78d8'];
@@ -1447,7 +1488,7 @@ function ddBolt(D, g, st, step, add, shadow){
     const prof = k => ellUV(0, zc, hy*.78*k, hz*k, 18);
     const mod = ddSweep(prof(1), m0, prof(1), m1, dark, 1.5), capA = ddSweep(prof(1), m0, prof(.5), m0 - 26, dark, 1.2),
           capB = ddSweep(prof(1), m1, prof(.46), m1 + 30, pal, 1.2);   // the one accent: a painted nose on the can
-    add('module', { svg: mod.svg + capA.svg + capB.svg, pts: [...mod.pts, ...capA.pts, ...capB.pts] }, { at: [m0 + 24, 0, z1 + 6] });
+    add('module', ddCat(mod, capA, capB), { at: [m0 + 24, 0, z1 + 6] });
     for (let i = 0; i < 7; i++){ const x = m0 + 18 + i*28;   // heat-sink strips on the can's top
       add('module', ddBox(x, -38, z1 - 5, x + 9, 38, z1 + 3, DD_SILVER, .6, .8)); }
     for (const s of [-1, 1]) add('module', ddBox(-10, s > 0 ? hy*.76 : -hy*.79, zc - 8, 34, s > 0 ? hy*.79 : -hy*.76, zc + 8, DD_SILVER, .7, .9));
@@ -1459,7 +1500,7 @@ function ddBolt(D, g, st, step, add, shadow){
     let svg = b.svg;
     if (!DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw/2 + .3 : -bw/2 - .3;
       svg += vis([0, sy > 0 ? 1 : -1, 0]) ? ddLabelY(-bl/2 + 5, sy, z0 + bh/2 - 3, g.cells, 9) : ''; }
-    add('battery', { svg, pts: b.pts }, { inner: true, at: [-bl + 12, bw/2, z0 + bh*.7] });
+    add('battery', { ...b, svg }, { inner: true, at: [-bl + 12, bw/2, z0 + bh*.7] });
     for (const sx of [-bl + 40, -bl + 110]) add('strap', ddBox(sx - 7, -bw/2 - 1.6, z0 + bh, sx + 7, bw/2 + 1.6, z0 + bh + 1.8, pal, .7, .9), { cover: true });
     add('xt60', ddWire([[5, 10, z0 + bh*.5], [60, 20, 70], [100, 30, Z.belly + 18]], '#8a3a30', 1.4), { inner: true });
     shadow.push(ddXF([-bl + 5, -bw/2, z0 + bh]), ddXF([5, bw/2, z0 + bh]));
@@ -1504,12 +1545,12 @@ function ddHeli(D, g, st, step, add, shadow){
   }
   if (step('esc')){
     const esc = ddBox(-240, -100, 342, 10, 100, 354, DD_PCB_E, .8, 1);
-    let svg = esc.svg; for (let i = 0; i < 5; i++) svg += ddBox(-222 + i*42, -82, 354, -200 + i*42, 82, 362, DD_CHIP, .5, .6).svg;
-    add('esc', { svg, pts: esc.pts }, { inner: true, at: [10, 100, 354] });
+    const chips = []; for (let i = 0; i < 5; i++) chips.push(ddBox(-222 + i*42, -82, 354, -200 + i*42, 82, 362, DD_CHIP, .5, .6));
+    add('esc', { ...ddCat(esc, ...chips), pts: esc.pts }, { inner: true, at: [10, 100, 354] });
   }
   if (step('fc')){
     const fc = ddBox(-320, -85, 430, -60, 85, 442, DD_PCB_F, .8, 1.2);
-    add('fc', { svg: fc.svg + ddBox(-220, -40, 442, -160, 40, 450, DD_CHIP, .5, .6).svg, pts: fc.pts }, { inner: true, at: [-60, 85, 442] });
+    add('fc', { ...ddCat(fc, ddBox(-220, -40, 442, -160, 40, 450, DD_CHIP, .5, .6)), pts: fc.pts }, { inner: true, at: [-60, 85, 442] });
     add('gyro', ddBox(-120, -20, 442, -100, 0, 446, matOf('#d8d8d8'), .5, .6), { inner: true });
     // GPS on the nose deck, a stub behind the mast and a whip on the boom
     add('gps', ddBox(420, -58, zD - 4, 540, 58, zD + 8, matOf('#2f3640'), .9, 1.2), { at: [480, 58, zD + 8] });
@@ -1523,7 +1564,7 @@ function ddHeli(D, g, st, step, add, shadow){
     for (const s of [-1, 1]) add('gimbal', ddRod([gx - 70, 96*s, zB + 20], [gx - 6, (gr - 6)*s, gz + 30], 15, blk, .9));
     const lens = ddRod([gx + gr*.48, 0, gz], [gx + gr*.99, 0, gz], 54, matOf('#121110'), 1, 46);
     const gl = ddRod([gx + gr*.99, 0, gz], [gx + gr*1.03, 0, gz], 37, matOf('#4b6b9a'), .7);
-    add('camera', { svg: lens.svg + gl.svg, pts: lens.pts }, { at: [gx + gr, 0, gz] });
+    add('camera', { ...ddCat(lens, gl), pts: lens.pts }, { at: [gx + gr, 0, gz] });
   }
   if (step('wiring')){
     // inside an opaque body: keep the runs dark, so a part caught by the depth sort reads as a shadow, not a cable
@@ -1573,7 +1614,7 @@ function ddHeli(D, g, st, step, add, shadow){
 }
 // a rotor in a vertical plane (normal y): the blades sweep x-z, so it reads as a tail rotor and not a prop
 function ddTailRotor(cx, cy, cz, R, blades, ang, col, speed){
-  const M = matOf(col), blur = Math.min(1, (speed || 0)*1.6), pts = [];
+  const M = matOf(col), blur = Math.min(1, (speed || 0)*1.6), pts = [], faces = [];
   let s = '';
   if (blur > .05){ const ring = Array.from({ length: 24 }, (_, i) => { const a = i/24*2*Math.PI;
       return ddXF([cx + R*Math.cos(a), cy + 2, cz + R*Math.sin(a)]); });
@@ -1585,9 +1626,11 @@ function ddTailRotor(cx, cy, cz, R, blades, ang, col, speed){
     const q = [Q(26, 20, 5), Q(R*.6, 30, 4), Q(R, 13, 1), Q(R, -10, -1), Q(R*.6, -22, -1), Q(26, -12, -1)];
     let n = ddNormal(q); if (!vis(n)) n = n.map(v => -v);
     s += `<g opacity="${f(1 - .7*blur)}">` + shape(q, toneI(n, M), .8) + '</g>'; pts.push(...q);
+    if (DD_VR) faces.push(ddCap(q, [0, 1, 0]));   // blades sit in a vertical plane, so they face along y
   }
   const hub = ddRod([cx, cy - 15, cz], [cx, cy + 15, cz], 20, M, .8, 20, 12);
-  return { svg: s + hub.svg, pts: [...pts, ...hub.pts, ...ellUV(cx, cz, R, R, 8).map(([u, v]) => ddXF([u, cy, v]))] };
+  return { svg: s + hub.svg, pts: [...pts, ...hub.pts, ...ellUV(cx, cz, R, R, 8).map(([u, v]) => ddXF([u, cy, v]))],
+    vr: DD_VR ? { kind: 'solid', faces: [...faces, ...hub.vr.faces], mat: M, shade: 'in', w: .8, sil: .8 } : null };
 }
 // the spin arrow for it, in the same vertical plane
 function ddTailArc(cx, cy, cz, R, a0deg){
@@ -1597,7 +1640,8 @@ function ddTailArc(cx, cy, cz, R, a0deg){
   const tip = ddXF([end[0] + tg[0]*R*.15, end[1], end[2] + tg[2]*R*.15]), rad = [Math.cos(ae), 0, Math.sin(ae)], w = R*.085;
   const head = [tip, ddXF([end[0] + rad[0]*w, end[1], end[2] + rad[2]*w]), ddXF([end[0] - rad[0]*w, end[1], end[2] - rad[2]*w])];
   const d = pd(arc, false);
-  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>` + shape(head, col, 1.1), pts: [...arc, ...head] };
+  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>` + shape(head, col, 1.1), pts: [...arc, ...head],
+    vr: DD_VR ? { kind: 'wire', pts: arc, col, w: 1 } : null };
 }
 
 /* ---------- extents (for framing and the build mat) ---------- */

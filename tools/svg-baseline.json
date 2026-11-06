@@ -1,0 +1,123 @@
+{
+  "freestyle": {
+    "style": "xplate",
+    "states": {
+      "full": "5f351851b9f4fb5b",
+      "full:bytes": 126626,
+      "mid": "2d5b9af70aff17d2",
+      "mid:bytes": 146770,
+      "early": "1e0bb521cca147da",
+      "early:bytes": 128116
+    }
+  },
+  "cinewhoop": {
+    "style": "duct",
+    "states": {
+      "full": "5f5142640ff99123",
+      "full:bytes": 200044,
+      "mid": "2efcd744b62a30b6",
+      "mid:bytes": 221675,
+      "early": "829741f867b116d5",
+      "early:bytes": 204216
+    }
+  },
+  "mini": {
+    "style": "shell",
+    "states": {
+      "full": "7aec175f8cde207f",
+      "full:bytes": 95349,
+      "mid": "8120994ed304c21b",
+      "mid:bytes": 115068,
+      "early": "fa3ccfb4a68c0233",
+      "early:bytes": 96058
+    }
+  },
+  "octo": {
+    "style": "round",
+    "states": {
+      "full": "51ea23897608acac",
+      "full:bytes": 214373,
+      "mid": "269bded239051f90",
+      "mid:bytes": 244027,
+      "early": "b5839701d933dcca",
+      "early:bytes": 216458
+    }
+  },
+  "race": {
+    "style": "xplate",
+    "states": {
+      "full": "a3015b04fcd645f6",
+      "full:bytes": 123668,
+      "mid": "f8b7cd05853a2708",
+      "mid:bytes": 143993,
+      "early": "1205a60431ca9a4e",
+      "early:bytes": 125114
+    }
+  },
+  "longrange": {
+    "style": "xplate",
+    "states": {
+      "full": "14e9e6ac3e339d43",
+      "full:bytes": 122886,
+      "mid": "a51a22c942872f1a",
+      "mid:bytes": 143058,
+      "early": "4e9da702f3fca434",
+      "early:bytes": 124255
+    }
+  },
+  "whoop": {
+    "style": "duct",
+    "states": {
+      "full": "217a71d6ff842dc3",
+      "full:bytes": 186835,
+      "mid": "cf91c305e7602e93",
+      "mid:bytes": 205718,
+      "early": "68cf232438a15314",
+      "early:bytes": 191114
+    }
+  },
+  "attack": {
+    "style": "strike",
+    "states": {
+      "full": "3dbdd2984b86ca00",
+      "full:bytes": 145984,
+      "mid": "99e7b50147712d42",
+      "mid:bytes": 166394,
+      "early": "eb1746ad514d126a",
+      "early:bytes": 147470
+    }
+  },
+  "hexa": {
+    "style": "round",
+    "states": {
+      "full": "7cf249bc38fdd9f4",
+      "full:bytes": 180017,
+      "mid": "35afd3b016d6899a",
+      "mid:bytes": 205163,
+      "early": "7c57e1b272a2dc68",
+      "early:bytes": 181368
+    }
+  },
+  "bolt": {
+    "style": "bolt",
+    "states": {
+      "full": "24a84ed4dccea8e6",
+      "full:bytes": 158429,
+      "mid": "ce450947d7fa6b2a",
+      "mid:bytes": 179272,
+      "early": "136bf4594a7d2c74",
+      "early:bytes": 159895
+    }
+  },
+  "ghost": {
+    "style": "heli",
+    "states": {
+      "full": "bde3c3b910ce0fa5",
+      "full:bytes": 121438,
+      "mid": "b4fefd6a84f3f55a",
+      "mid:bytes": 128725,
+      "early": "21fb510c29dcab5e",
+      "early:bytes": 122526
+    }
+  }
+}

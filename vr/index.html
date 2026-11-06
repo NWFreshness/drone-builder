@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Drone Lab VR</title>
+<!-- The drawing layer is loaded as classic scripts, exactly as the 2D pages do it: core.js brings the
+     palettes and helpers, drones-data.js the 11 drones, drone-draw.js the geometry. vr-app.js is the
+     only module and turns DD_VR on through vr-scene.js. -->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f2efe7; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; left: 18px; top: 18px; max-width: 380px; padding: 11px 14px 12px;
+    background: rgba(255, 250, 235, .92); border: 1.5px solid #231e16; border-radius: 8px;
+    color: #231e16; font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; pointer-events: none; letter-spacing: .01em;
+    box-shadow: 3px 3px 0 rgba(35, 30, 22, .9);
+  }
+  #hud b { letter-spacing: .09em; text-transform: none; font-size: 10.5px; }
+  #hud .hd { display: block; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+  #hud .body { color: #3a352b; }
+  #hud .dim { color: #857d6e; }
+  #hud .flash, #hud .err { color: #b3392c; }
+  #enter {
+    position: fixed; right: 18px; bottom: 18px; padding: 11px 17px;
+    background: #fff4d6; color: #231e16; border: 2px solid #231e16; border-radius: 9px;
+    box-shadow: 3px 3px 0 #231e16; font: 700 11.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: .12em; text-transform: uppercase; cursor: pointer;
+  }
+  #enter:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #231e16; }
+  #hint {
+    position: fixed; left: 18px; bottom: 18px; color: #857d6e;
+    font: 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em;
+  }
+</style>
+</head>
+<body>
+<div id="hud">loading…</div>
+<div id="hint">desktop: A/D step · B build · R reset · L labels · X see-through · drag to orbit</div>
+<button id="enter">Enter VR</button>
+
+<script src="../src/core.js"></script>
+<script src="../src/drones-data.js"></script>
+<script src="../src/drone-draw.js"></script>
+<script type="module" src="./vr-app.js"></script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>vr-style self-test</title>
+<!-- Self-test for vr/vr-style.js. The three fixtures below are hand-built payloads: this page must
+     not depend on src/drone-draw.js (another agent is editing it). Everything the renderer needs is
+     the plain-data `vr` shape from vr/CONTRACT.md, in world millimetres. -->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f2efe7; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; left: 16px; top: 16px; padding: 9px 12px 10px;
+    background: rgba(255, 250, 235, .88); border: 1.5px solid #231e16; border-radius: 7px;
+    color: #231e16; font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre; pointer-events: none; letter-spacing: .01em;
+  }
+  #hud b { letter-spacing: .09em; text-transform: uppercase; font-size: 10.5px; }
+  #hud .dim { color: #857d6e; }
+</style>
+</head>
+<body>
+<div id="hud">loading…</div>
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+import * as VS from './vr-style.js';
+
+/* ---------------- fixtures: hand-built `vr` payloads ---------------- */
+
+const MAT = VS.PALS.mustard;          // { l:'#f4b829', m:'#d49c1f', d:'#4e4a18' }
+const SHADE = 'out';                  // exterior shading = core.js tone()
+
+// (a) a 5-face box, the same five faces core.js box() emits (the underside is never drawn)
+function boxSolid(cx, cy, x0, y0, z0, x1, y1, z1){
+  const F = [
+    [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],   // +y
+    [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],   // +x
+    [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],   // -y
+    [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]],   // -x
+    [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],   // +z
+  ];
+  return { name: 'box', kind: 'solid', mat: MAT, shade: SHADE, w: .8, sil: 1.2,
+           faces: F.map(f => f.map(([x, y, z]) => [x + cx, y + cy, z])) };
+}
+
+// (b) a 16-sided cylinder: a ring of side quads plus the two end caps
+function cylSolid(cx, cy, z0, z1, r, n){
+  const ring = z => Array.from({ length: n }, (_, i) => {
+    const a = i/n*2*Math.PI; return [cx + r*Math.cos(a), cy + r*Math.sin(a), z]; });
+  const A = ring(z0), B = ring(z1), faces = [];
+  for (let i = 0; i < n; i++){ const j = (i + 1) % n; faces.push([A[i], A[j], B[j], B[i]]); }
+  faces.push(A.slice().reverse(), B.slice());          // bottom cap, top cap
+  return { name: 'cyl16', kind: 'solid', faces, mat: MAT, shade: SHADE, w: .8, sil: 1.2 };
+}
+
+// (c) a dome: four bands of ring quads, the same ring radii ddDome() uses
+function domeSolid(cx, cy, z0, r, h, segs){
+  const rings = [0, .35, .65, .88, 1].map(t => {
+    const a = t*Math.PI/2, rr = r*Math.cos(a) + .01;
+    return Array.from({ length: segs }, (_, i) => {
+      const b = i/segs*2*Math.PI;
+      return [cx + rr*Math.cos(b), cy + rr*Math.sin(b), z0 + h*Math.sin(a)]; });
+  });
+  const faces = [];
+  for (let k = 0; k < rings.length - 1; k++){
+    const A = rings[k], B = rings[k + 1];
+    for (let i = 0; i < segs; i++){ const j = (i + 1) % segs; faces.push([A[i], A[j], B[j], B[i]]); }
+  }
+  return { name: 'dome', kind: 'solid', faces, mat: MAT, shade: SHADE, w: .8, sil: 1.2 };
+}
+
+const fixtures = [
+  boxSolid(-130, 0, -40, -28, 0, 40, 28, 80),
+  cylSolid(0, 0, 0, 80, 32, 16),
+  domeSolid(130, 0, 0, 44, 44, 20),
+];
+
+/* ---------------- scene ---------------- */
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#f2efe7');
+
+const cloud = [];                                     // every fixture vertex, for the drop shadow
+for (const f of fixtures){
+  const g = VS.partMesh(f);
+  scene.add(g);
+  for (const poly of f.faces) for (const p of poly) cloud.push(p);
+}
+
+const bb = [[Infinity, Infinity, Infinity], [-Infinity, -Infinity, -Infinity]];
+for (const p of cloud) for (let k = 0; k < 3; k++){ bb[0][k] = Math.min(bb[0][k], p[k]); bb[1][k] = Math.max(bb[1][k], p[k]); }
+
+scene.add(VS.boardMesh(bb, VS.BOARD));                // the cutting mat, top at z = 0
+scene.add(VS.shadowMesh(cloud, 0));                   // the shadow, laid on the mat
+
+const centre = new THREE.Vector3(
+  (bb[0][0] + bb[1][0])/2*VS.SCALE,
+  (bb[0][1] + bb[1][1])/2*VS.SCALE,
+  (bb[0][2] + bb[1][2])/2*VS.SCALE);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(2);                            // 2x DPR, as the verification pass expects
+renderer.setSize(window.innerWidth, window.innerHeight);
+VS.setInkResolution(window.innerWidth*2, window.innerHeight*2);   // fat-line ink needs device px
+renderer.toneMapping = THREE.NoToneMapping;           // colours are already final
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(28, window.innerWidth/window.innerHeight, .01, 20);
+camera.up.set(0, 0, 1);                               // model space is z-up
+
+let yaw = 45, pitch = 35, dist = .7;
+function place(){
+  const t = yaw*Math.PI/180, p = pitch*Math.PI/180;
+  camera.position.set(
+    centre.x + dist*Math.cos(p)*Math.cos(t),
+    centre.y + dist*Math.cos(p)*Math.sin(t),
+    centre.z + dist*Math.sin(p));
+  camera.lookAt(centre);
+}
+// fit the whole mat into the frame, then leave a little air around it
+{
+  const fit = new THREE.Box3().setFromObject(scene);
+  const r = fit.getBoundingSphere(new THREE.Sphere()).radius;
+  dist = r/Math.sin(camera.fov*.5*Math.PI/180)*1.02;
+  place();
+}
+
+/* ---------------- pointer orbit ---------------- */
+
+let drag = null;
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; el.setPointerCapture(e.pointerId); });
+el.addEventListener('pointerup', e => { drag = null; el.releasePointerCapture(e.pointerId); });
+el.addEventListener('pointermove', e => {
+  if (!drag) return;
+  yaw += (e.clientX - drag.x)*.35;
+  pitch = Math.max(-8, Math.min(88, pitch + (e.clientY - drag.y)*.28));
+  drag = { x: e.clientX, y: e.clientY };
+  place(); draw();
+});
+el.addEventListener('wheel', e => {
+  e.preventDefault();
+  dist = Math.max(.15, Math.min(3, dist*(1 + Math.sign(e.deltaY)*.08)));
+  place(); draw();
+}, { passive: false });
+
+/* ---------------- readout: measured, not asserted ---------------- */
+
+const stats = fixtures.map(f => {
+  const g = VS.facesToGeometry(f.faces, f.mat, f.shade);
+  return { name: f.name, faces: f.faces.length, tris: g.position.length/9, segs: g.edge.length/6 };
+});
+const total = stats.reduce((a, s) => ({ tris: a.tris + s.tris, segs: a.segs + s.segs }), { tris: 0, segs: 0 });
+
+const pad = (s, n) => String(s).padEnd(n);
+const num = (v, n) => String(v).padStart(n);
+// distinct baked tones per solid, read back from the geometry's colour attribute
+const toneCount = g => {
+  const s = new Set();
+  for (let i = 0; i < g.color.length; i += 3) s.add([0, 1, 2].map(k => g.color[i + k].toFixed(3)).join(','));
+  return s.size;
+};
+const toneRows = [['+x', [1, 0, 0]], ['+y', [0, 1, 0]], ['+z', [0, 0, 1]]].map(([name, n]) => {
+  const d = n[0]*VS.SUN[0] + n[1]*VS.SUN[1] + n[2]*VS.SUN[2];
+  return '  ' + name + '  d ' + (d < 0 ? '' : ' ') + d.toFixed(3) + '  ' + VS.toneW(n, MAT, SHADE);
+});
+
+document.getElementById('hud').innerHTML =
+  '<b>vr-style self-test</b>\n' +
+  '<span class="dim">flat tone per face, baked from a fixed sun; ink on every edge</span>\n\n' +
+  'part    faces   tris   segs  tones\n' +
+  fixtures.map((f, i) => pad(stats[i].name, 7) + num(stats[i].faces, 5) + num(stats[i].tris, 7) +
+    num(stats[i].segs, 7) + num(toneCount(VS.facesToGeometry(f.faces, f.mat, f.shade)), 7)).join('\n') + '\n' +
+  pad('total', 7) + num('', 5) + num(total.tris, 7) + num(total.segs, 7) + '\n\n' +
+  '<span class="dim">box faces toward the camera (shade out)</span>\n' +
+  toneRows.join('\n') + '\n\n' +
+  'yaw 45° · pitch 35° · 2x DPR\n' +
+  '<span class="dim">drag to orbit · wheel to zoom</span>';
+
+window.__ST = { stats, total, fixtures, toneW: (n) => VS.toneW(n, MAT, SHADE), scene, camera,
+  // model mm -> CSS pixels in this viewport (handy when a screenshot needs cropping)
+  screen: p => { const v = new THREE.Vector3(p[0]*VS.SCALE, p[1]*VS.SCALE, p[2]*VS.SCALE).project(camera);
+                 return [Math.round((v.x*.5 + .5)*window.innerWidth), Math.round((-v.y*.5 + .5)*window.innerHeight)]; } };
+
+function onResize(){
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  VS.setInkResolution(window.innerWidth*2, window.innerHeight*2);
+  draw();
+}
+window.addEventListener('resize', onResize);
+
+function draw(){ renderer.render(scene, camera); }
+renderer.setAnimationLoop(draw);
+</script>
+</body>
+</html>
