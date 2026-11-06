@@ -26,7 +26,16 @@ DD_O = [DR_M, DR_M, DR_MH];
 const DR_ALL = ddModel(DR, { show: () => 1, drop: 0 });
 const DR_STEPS = [...new Set(DR_ALL.items.map(it => it.step))].filter(i => i >= 0).sort((a, b) => a - b);
 const DR_MOT = DR_ALL.motors;
-const DR_DEMOS = {
+const DR_HELI = DR.geo.style === 'heli';
+// A helicopter has no differential thrust to explain: throttle is collective, the cyclic tilts the whole disc and the
+// pedals drive the tail rotor, so it gets its own demo set and its own copy.
+const DR_DEMOS = DR_HELI ? {
+  hover:  { label:'Hover', t:'Hover: the collective holds every blade at just enough pitch that the disc pushes up exactly the weight, and the tail rotor pushes sideways just hard enough to cancel the torque the mast puts into the body. Nothing moves.' },
+  climb:  { label:'Climb (collective)', t:'Pull collective: every blade bites more air at the same rpm, so the disc makes more thrust than the weight and the machine climbs. Collective sets height, not speed.' },
+  pitch:  { label:'Cyclic forward', t:'Push the cyclic forward: the disc tilts nose-down, the thrust leans forward, and the helicopter accelerates forward instead of up. The cyclic sets direction; the collective still sets how hard it pulls.' },
+  roll:   { label:'Cyclic right', t:'Cyclic right: the disc tilts right, the thrust leans that way and the machine slides right. The body follows the disc; it does not hang under it the way a quad does.' },
+  yaw:    { label:'Yaw (tail rotor)', t:'Press right pedal: the tail rotor bites harder and pushes the tail left, so the nose swings right around the mast. The main rotor keeps twisting the body the other way, so the pedals are what hold a heading.' },
+} : {
   hover:  { label:'Hover', t:'Hover: every motor pushes the same and total thrust equals the weight. Two props spin clockwise and two counter-clockwise: each twists the frame the other way, the twists cancel, so it does not spin.' },
   climb:  { label:'Climb (throttle)', t:'Throttle up: all motors speed up together. Thrust is now more than the weight, so the drone accelerates upward. Throttle sets height, not speed.' },
   pitch:  { label:'Pitch forward', t:'Pitch forward: the flight controller speeds up the rear motors and slows the front ones. The nose dips, the thrust leans forward, and the drone accelerates forward. This "mixing" is added on top of the throttle for every motor.' },
@@ -34,18 +43,23 @@ const DR_DEMOS = {
   yaw:    { label:'Yaw right', t:'Yaw right: the counter-clockwise props speed up and the clockwise ones slow down. Total thrust stays the same so height holds, but the twists no longer cancel: the frame turns opposite to the faster props.' },
 };
 const dlTarget = st => {
-  const d = st.demo, n = DR_MOT.length, base = d === 'climb' ? 1.35 : 1;
+  const d = st.demo;
+  if (DR_HELI){   // one station: the number stands for blade pitch (collective), the attitude for the cyclic
+    return { thr: d ? [d === 'climb' ? 1.35 : 1] : [0], r: d === 'roll' ? .16 : 0, p: d === 'pitch' ? .16 : 0, lift: d ? DR_EXT.h*(d === 'climb' ? .7 : .35) : 0 };
+  }
+  const n = DR_MOT.length, base = d === 'climb' ? 1.35 : 1;
   const thr = DR_MOT.map(m => d === 'pitch' ? (m.x < 0 ? 1.28 : .72) : d === 'roll' ? (m.y > 0 ? 1.28 : .72) : d === 'yaw' ? (m.dir < 0 ? 1.3 : .7) : base);
   return { thr: d ? thr : Array(n).fill(0), r: d === 'roll' ? .16 : 0, p: d === 'pitch' ? .16 : 0, lift: d ? DR_EXT.h*(d === 'climb' ? .7 : .35) : 0 };
 };
 
 const dlShow = st => i => { const k = DR_STEPS.indexOf(i); if (k < 0) return 0; return k < st.done - 1 ? 1 : k === st.done - 1 ? st.anim : 0; };
-const dlWeight = st => DR_STEPS.slice(0, st.done).reduce((a, i) => a + DR.wt[i], 0);
+// the weights are keyed by step name, so a drone only carries the parts it actually has
+const dlWeight = st => DR_STEPS.slice(0, st.done).reduce((a, i) => a + (DR.wt[DL_STEPS[i].k] || 0), 0);
 const dlFmtW = g => g >= 1000 ? (g/1000).toFixed(g >= 10000 ? 1 : 2) + ' kg' : Math.round(g) + ' g';
 
 function scene(st){
   DD_T = { r: st.cur.r, p: st.cur.p, y: st.cur.y, zc: DR_EXT.h*.4, lift: st.cur.lift };
-  const tg = st.cur.thr, mod = ddModel(DR, { show: dlShow(st), drop: DR_EXT.h*1.4, from: { battery: DR.geo.style === 'shell' ? [-1.4, 0, 0] : [0, 0, 1] },
+  const tg = st.cur.thr, mod = ddModel(DR, { show: dlShow(st), drop: DR_EXT.h*1.4, from: { battery: DR_HELI || DR.geo.style === 'shell' ? [-1.4, 0, 0] : [0, 0, 1] },
     spin: st.spin, speeds: tg, thrust: st.demo || tg.some(v => v > .05) ? tg : null, arrows: true, sel: st.sel });
   const M2 = 2*DR_M, top = boardTop(0, 0, M2, M2, DR_MH, DR_M*.06);
   let s = board(0, 0, M2, M2, DR_MH, DR_M*.06, DR_MAT);
@@ -59,8 +73,8 @@ function scene(st){
   const justPlaced = st.done ? DR_STEPS[st.done - 1] : -1, stepOf = {};
   for (const it of mod.items) if (stepOf[it.key] == null) stepOf[it.key] = it.step;
   // a handful of labels at a time: the outside parts normally, the electronics in see-through
-  const want = k > .6 ? ['fc', 'esc', 'gyro', 'rx', 'vtx', 'pdb', 'gps', 'xt60', 'cap', 'wire', 'battery', 'camera']
-    : ['plate', 'arm', 'duct', 'shell', 'motor', 'prop', 'camera', 'gimbal', 'action', 'battery', 'canopy', 'gear', 'antenna', 'fc', 'esc'];
+  const want = k > .6 ? ['fc', 'esc', 'gyro', 'rx', 'vtx', 'pdb', 'gps', 'xt60', 'cap', 'wire', 'battery', 'camera', 'payload', 'engine']
+    : ['payload', 'module', 'bay', 'plate', 'arm', 'duct', 'shell', 'boom', 'rotor', 'tailrotor', 'mast', 'skid', 'motor', 'prop', 'camera', 'gimbal', 'action', 'battery', 'canopy', 'gear', 'antenna', 'engine', 'hatch', 'fc', 'esc', 'fin'];
   const lab = Object.entries(mod.labels).filter(([key]) => DL_PARTS[key] && (want.includes(key) || key === st.sel))
     .sort((a, b) => (b[0] === st.sel) - (a[0] === st.sel) || want.indexOf(a[0]) - want.indexOf(b[0])).slice(0, 9).map(([key, at]) => ({ at, text: DL_PARTS[key][0], on: st.sel === key || stepOf[key] === justPlaced }));
   if (lab.length) s += xrCallouts(lab, [DR_M - DR_EXT.r, DR_M + DR_EXT.r, DR_M - DR_EXT.r, DR_M + DR_EXT.r, DR_MH, DR_MH + DR_EXT.h]);
@@ -73,13 +87,15 @@ let dlInfoEl = null, dlInfoHtml = '';
 function dlInfo(st){
   if (!dlInfoEl){ dlInfoEl = document.createElement('div'); dlInfoEl.className = 'dlinfo'; const stg = document.querySelector('.stage'); if (!stg) return; stg.after(dlInfoEl); }
   const next = st.done < DR_STEPS.length ? DL_STEPS[DR_STEPS[st.done]].name : null;
+  // a drone may reword a shared step for its own hardware (a heli's "motors" step is an engine, not four brushless cans)
+  const stepT = sp => (DR.stepText && DR.stepText[sp.k]) || sp.t;
   let h, t;
   if (st.sel && DL_PARTS[st.sel]){ [h, t] = DL_PARTS[st.sel]; }
   else if (st.demo){ h = 'How it flies: ' + DR_DEMOS[st.demo].label; t = DR_DEMOS[st.demo].t; }
-  else if (st.done){ const sp = DL_STEPS[DR_STEPS[st.done - 1]]; h = `Step ${st.done} of ${DR_STEPS.length}: ${sp.name}`; t = sp.t; }
+  else if (st.done){ const sp = DL_STEPS[DR_STEPS[st.done - 1]]; h = `Step ${st.done} of ${DR_STEPS.length}: ${sp.name}`; t = stepT(sp); }
   else { h = DR.name + ' (' + DR.cls + ')'; t = DR.blurb + ' ' + DR.facts.map(([a, b]) => a + ': ' + b).join(', ') + '.'; }
   const nx = next ? `Next part: <strong>${next}</strong>.` : 'Fully built. Try How it flies, then Fly it.';
-  const lg = st.done > DR_STEPS.indexOf(DD_STEP_I.motors) ? ` <span><b style="background:${DD_CW}"></b>clockwise from above <b style="background:${DD_CCW}"></b>counter-clockwise <b style="background:#f4b829"></b>thrust</span>` : '';
+  const lg = !DR_HELI && st.done > DR_STEPS.indexOf(DD_STEP_I.motors) ? ` <span><b style="background:${DD_CW}"></b>clockwise from above <b style="background:${DD_CCW}"></b>counter-clockwise <b style="background:#f4b829"></b>thrust</span>` : '';
   const html = `<h2>${h}</h2><p>${t}</p><div class="lg">${nx} Click any part to read what it does. <a href="drone-lab.html">All drones</a>${lg}</div>`;
   if (html !== dlInfoHtml){ dlInfoHtml = html; dlInfoEl.innerHTML = html; }
 }

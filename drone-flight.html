@@ -26,6 +26,13 @@
   .grid label{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
   .grid input[type=range]{width:100%;accent-color:var(--ink)}
   .grid output{min-width:52px;text-align:right;font-weight:700}
+  table.lb{width:100%;border-collapse:collapse;margin:8px 0;font-size:12.5px}
+  table.lb th{text-align:left;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--ink);padding:4px 6px}
+  table.lb td{padding:4px 6px;border-bottom:1px solid var(--rule,#ddd6c8)}
+  table.lb td.t{font-weight:800;font-variant-numeric:tabular-nums;text-align:right}
+  table.lb tr.mine td{background:#fff1bf}
+  table.lb tr.mine td.t::after{content:' ← you'}
+  .empty{color:var(--muted);font-size:12.5px;padding:8px 0}
   .axes{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
   .axes div{font-size:11px;border:1px solid var(--rule,#ddd6c8);border-radius:6px;padding:3px 5px;position:relative;overflow:hidden}
   .axes i{position:absolute;left:50%;top:0;bottom:0;background:var(--acc);opacity:.6}
@@ -44,6 +51,7 @@
   <button class="b" id="bReset">Reset</button>
   <span class="sp"></span>
   <button class="b" id="bHow">How it flies</button>
+  <button class="b" id="bBoard">Leaderboard</button>
   <button class="b" id="bSet">Settings</button>
   <button class="b" id="bHelp">Controls</button>
   <a class="b" id="bBuild" href="#" style="text-decoration:none">Build</a>
@@ -74,13 +82,31 @@
   <p>To arm, the throttle must be at the bottom and the drone level (Betaflight refuses otherwise). Props spin at idle once armed. Crashes happen above a real impact speed; R puts on a fresh battery.</p>
 </div>
 
+<div class="card" id="board" hidden>
+  <button class="b x" data-close>Close</button>
+  <h2>Target range leaderboard</h2>
+  <p>Fly to the bullseye at the far end of the range and hit it. The clock starts when you take off and stops when you hit the target, so the score is the flying time. Only the bullseye counts.</p>
+  <div id="boardList"></div>
+  <h3>Your best</h3>
+  <p id="boardMine"></p>
+  <div class="row"><button class="b" id="bBoardClear">Clear the board</button></div>
+</div>
+
 <div class="card" id="how" hidden>
   <button class="b x" data-close>Close</button>
   <h2>How it stays in the air</h2>
+  <div id="howQuad">
   <p><b>Thrust.</b> Each prop pushes air down and the drone up. When the total thrust equals the weight it hovers; more and it climbs. The throttle stick sets this total.</p>
   <p><b>Differential thrust.</b> To tilt, the flight controller makes some motors push harder than others. Rear motors faster: the nose dips and the drone flies forward. Left motors faster: it rolls right. The drone moves by leaning its thrust, like a helicopter.</p>
   <p><b>Torque cancellation.</b> Spinning a prop twists the frame the opposite way. Half the props spin clockwise and half counter-clockwise, so at a hover the twists cancel. To yaw, the FC speeds up one set and slows the other: total thrust stays the same but the twists no longer cancel, so the frame turns.</p>
   <p><b>Mixing.</b> Every motor gets: throttle + pitch share + roll share + yaw share. The panel at the bottom shows it live: each circle is a motor, its fill is how hard it is working, its ring colour is its spin direction (red clockwise, blue counter-clockwise from above).</p>
+  </div>
+  <div id="howHeli" hidden>
+  <p><b>Collective.</b> A helicopter has one wing and it is spinning. Collective is the angle of both blades at once: more pitch bites more air, so the same rotor speed lifts more weight. The throttle stick (or the collective lever) sets it, and the panel at the bottom shows it as one bar with the hover point marked.</p>
+  <p><b>Cyclic.</b> The stick does not change the rotor speed. It tilts the whole disc: the blade pitch rises on one side of the circle and falls on the other, so the thrust vector leans and the machine accelerates that way. Return the stick and the disc comes back level, and it coasts to a stop on its own.</p>
+  <p><b>Anti-torque.</b> The engine turns the main rotor one way and the fuselage tries to turn the other. The tail rotor pushes sideways to stop it. Push the yaw stick and the tail rotor changes thrust: the nose swings the other way. At a hover the machine needs a little pedal all the time, just like the real one.</p>
+  <p><b>Why it feels heavy.</b> All 25 kg hangs from one mast, and the rotor has to spin up before it can save you. Drop collective and it sinks; there is no second motor to catch it. That lag, and the fact that control authority comes from the collective, is what makes a helicopter different to fly.</p>
+  </div>
   <p><b>The gyro loop.</b> The flight controller measures rotation thousands of times a second and keeps correcting the motors (the PID loop). Motors cannot change speed instantly: big props on a heavy drone react slowly, a 5-inch reacts in hundredths of a second. You feel that difference here.</p>
 </div>
 
@@ -761,6 +787,7 @@ function mountKeypad(spec){
 // battery is only plugged in to fly, so both come after the shell.
 const DL_STEPS = [
   { k:'frame',   name:'Frame',            t:'The frame is the skeleton: carbon-fibre plates that everything bolts to. It has to be stiff, because any flex shows up as vibration in the gyro.' },
+  { k:'boom',    name:'Tail boom',        t:'The boom puts the tail rotor a long way behind the main rotor. That long lever is the whole trick: a small sideways push out there swings the entire nose. It also carries the drive shaft aft.' },
   { k:'arms',    name:'Arms',             t:'The arms put the motors far enough apart that the props never touch. Longer arms carry bigger props; on most FPV frames a crashed arm unbolts and is swapped in minutes.' },
   { k:'motors',  name:'Motors',           t:'Brushless motors: a ring of magnets in the spinning bell, coils on the fixed stator. "2207" means a 22 mm wide, 7 mm tall stator. Diagonal motors spin the same way.' },
   { k:'esc',     name:'ESCs',             t:'Electronic speed controllers turn battery DC into three switched phases that spin each motor, thousands of times a second, at whatever speed the flight controller asks for.' },
@@ -768,8 +795,10 @@ const DL_STEPS = [
   { k:'camera',  name:'Camera & radios',  t:'The camera feeds the video transmitter (VTX) that sends live video to your goggles; the receiver (RX) picks up your radio sticks. Two separate radio links.' },
   { k:'wiring',  name:'Wiring',           t:'Three motor wires per motor to the ESC, a thick battery lead with a capacitor to soak up voltage spikes, and thin signal wires between the boards.' },
   { k:'shell',   name:'Top plate / shell',t:'The top plate or shell closes the frame, stiffens it and protects the electronics. It also carries the battery strap or slot.' },
+  { k:'payload', name:'Payload pod',      t:'The pod slung under the belly on two rails. It carries the marker charge for the target range. Hanging it low puts the mass under the frame, which steadies the drone but makes it heavier to accelerate.' },
   { k:'battery', name:'Battery',          t:'A lithium battery: each cell is 4.2 V full and should not go below about 3.5 V under load. It goes on only to fly; weight sits near the centre so the drone balances.' },
   { k:'props',   name:'Propellers',       t:'Props go on last, always. Half spin clockwise and half counter-clockwise so their twisting forces cancel. Red arrow = clockwise from above, blue = counter-clockwise.' },
+  { k:'rotor',   name:'Main rotor',       t:'The main rotor is the wing. Two long blades spun fast enough that each one meets air at flying speed: pitch sets how hard they bite (collective), and tilting the whole disc sends that thrust sideways (cyclic). The blades go on last, like props.' },
 ];
 
 // what each kind of part does (shown when a part is clicked, and as its tooltip)
@@ -801,6 +830,17 @@ const DL_PARTS = {
   pdb:      ['POWER BOARD', 'Power distribution board: splits battery power to every ESC.'],
   prop:     ['PROPELLER', 'Twisted blades push air down. A CW prop and a CCW prop are mirror images: fit the wrong one and it pushes air up.'],
   wing:     ['WING', 'Generates lift from forward speed, like a plane, so it flies far on little power.'],
+  payload:  ['PAYLOAD POD', 'The pod slung under the belly: it carries the marker charge used on the range. Hanging it low puts the mass under the frame, which steadies the drone but makes it heavier to accelerate.'],
+  fin:      ['FIN', 'Small fins on the tail of the pod: they keep it straight in flight and give the pilot something to read the drone\'s attitude from at speed.'],
+  skid:     ['SKID', 'Flat rails the craft lands on. Low and wide so it will not tip on uneven ground, and tall enough that the belly sensor never touches down first.'],
+  boom:     ['TAIL BOOM', 'Carries the tail rotor far aft. The long lever arm is what lets a small sideways push swing the whole nose, and the drive shaft runs down the inside of it.'],
+  mast:     ['MAST', 'The shaft from the transmission up to the rotor head. It carries the entire weight of the aircraft in tension while spinning at hundreds of rpm.'],
+  rotor:    ['MAIN ROTOR', 'Two long blades on a powered mast. Collective sets their bite, cyclic tilts the disc; the disc is the wing, so the machine flies where it points.'],
+  tailrotor:['TAIL ROTOR', 'Pushes sideways at the end of the boom. Its thrust cancels the torque the main rotor puts into the body, so the pedals can point the nose where you want it.'],
+  module:   ['MISSION MODULE', 'The swappable bay on the spine: sensors, radios or a warhead. Tool-free latches let the crew change the job between flights without tools.'],
+  bay:      ['PAYLOAD BAY', 'Field-swappable bay on a standard rail under the belly. Slide one out and the next in: camera, radar or a cargo pod.'],
+  engine:   ['ENGINE / TRANSMISSION', 'The engine drives the mast through a gearbox that trades speed for torque. Its exhaust and cooling sit under the cowling, right behind the mast.'],
+  hatch:    ['HATCH', 'A removable panel. Crews open it to reach the avionics and the battery plugs without tools.'],
 };
 
 /* Motor layouts: angle from the nose (deg, + toward the left), and spin seen from above (1 = CW, -1 = CCW).
@@ -808,13 +848,20 @@ const DL_PARTS = {
 const dlRing = (n, a0) => Array.from({ length:n }, (_, i) => ({ a: a0 + 360*i/n, dir: i % 2 ? -1 : 1 }));
 const DL_QUAD = dlRing(4, 45);
 
+/* Shared layout for the strike quad, in millimetres, so the assembly figure and the flight simulator
+   draw the same airframe: long splayed legs first (the payload pod needs clear air under the belly),
+   then the plates, the stack, the top plate and the battery. */
+const DL_STRIKE = g => { const leg = 46, zB = leg + 2.5, zA = zB + 2.5, zA1 = zA + 5, zC = zA1 + 2, zE = zC + 4, zF = zE + 10;
+  return { leg, zB, zA, zA1, zC, zE, zF, T0: zC + g.standH, s2: g.stack/2, bw: g.stack/2 + 3,
+           pod: { x0: -26, x1: 30, nose: 20, hy: 17, z0: zB - 34, z1: zB - 4 } }; };
+
 const DL_DRONES = [
   { id:'freestyle', name:'5-inch Freestyle', cls:'FPV quad', pal:'tomato', ready:true,
     blurb:'The do-everything FPV quad: flips, rolls and dives, carrying an action camera.',
     facts:[['Wheelbase','225 mm'], ['Props','5.1 in, 3 blades'], ['Battery','6S 1300 mAh'], ['Weight','about 650 g']],
     geo:{ style:'xplate', motors:DL_QUAD, arm:112, armW:14, propR:65, blades:3, motorR:14, motorH:18, plateL:104, plateW:44,
           standH:28, stack:30.5, action:true, batt:[72, 35, 38], cells:'6S', propCol:'#ef6a4c' },
-    wt:[38, 36, 132, 14, 8, 28, 18, 30, 210, 20],
+    wt:{frame:38, arms:36, motors:132, esc:14, fc:8, camera:28, wiring:18, shell:30, payload:0, battery:210, props:20},
     fly:{ mass:.65, twr:9, tau:.035, kd:.055, rate:[200, 670, .54], yawRate:[200, 600, .5], modes:['acro', 'angle'], crashV:8,
           uptilt:30, cells:6, mAh:1300, Imax:150, kQ:.016, cam:'fpv' } },
 
@@ -823,7 +870,7 @@ const DL_DRONES = [
     facts:[['Wheelbase','140 mm'], ['Props','3 in in ducts'], ['Battery','4S 850 mAh'], ['Weight','about 370 g']],
     geo:{ style:'duct', motors:DL_QUAD, arm:70, armW:10, propR:38, blades:3, motorR:9, motorH:12, ductR:41, ductH:24,
           stack:20, batt:[60, 31, 26], cells:'4S', propCol:'#8fd0f0' },
-    wt:[45, 40, 64, 7, 6, 34, 10, 16, 105, 8],
+    wt:{frame:45, arms:40, motors:64, esc:7, fc:6, camera:34, wiring:10, shell:16, payload:0, battery:105, props:8},
     fly:{ mass:.37, twr:5, tau:.045, kd:.11, rate:[150, 480, .4], yawRate:[150, 400, .4], modes:['acro', 'angle'], crashV:5.5,
           uptilt:12, cells:4, mAh:850, Imax:60, kQ:.014, cam:'fpv', ducts:true } },
 
@@ -831,7 +878,7 @@ const DL_DRONES = [
     blurb:'A folding sub-250 g camera drone. GPS holds it still when you let go of the sticks.',
     facts:[['Diagonal','247 mm'], ['Props','4 in, 2 blades'], ['Battery','2S 2450 mAh'], ['Weight','249 g']],
     geo:{ style:'shell', motors:DL_QUAD, propR:50, blades:2, motorR:8, cells:'2S', propCol:'#3d3935' },
-    wt:[48, 22, 28, 6, 12, 32, 4, 20, 77, 4],
+    wt:{frame:48, arms:22, motors:28, esc:6, fc:12, camera:32, wiring:4, shell:20, payload:0, battery:77, props:4},
     fly:{ mass:.249, twr:2.4, tau:.05, kd:.035, rate:[100, 200, .2], yawRate:[60, 120, .2], modes:['gps', 'sport', 'cine'], crashV:3.2,
           uptilt:-10, cells:2, mAh:2450, Imax:16, kQ:.012, cam:'gimbal' } },
 
@@ -840,7 +887,7 @@ const DL_DRONES = [
     facts:[['Diagonal','1240 mm'], ['Props','18 in, 2 blades'], ['Battery','2 x 6S 16000 mAh'], ['Weight','about 22 kg']],
     geo:{ style:'round', motors:dlRing(8, 22.5), arm:620, propR:228, blades:2, motorR:44, gearH:300, plateR:165, gimbal:'cine',
           cells:'2x 6S', propCol:'#3d3935' },
-    wt:[1900, 1600, 2800, 640, 260, 4200, 420, 380, 9200, 560],
+    wt:{frame:1900, arms:1600, motors:2800, esc:640, fc:260, camera:4200, wiring:420, shell:380, payload:0, battery:9200, props:560},
     fly:{ mass:22, twr:1.9, tau:.18, kd:.47, rate:[60, 120, .2], yawRate:[40, 80, .2], modes:['gps', 'angle'], crashV:2.5,
           uptilt:-15, cells:6, mAh:32000, Imax:420, kQ:.02, cam:'gimbal' } },
 
@@ -849,7 +896,7 @@ const DL_DRONES = [
     facts:[['Wheelbase','215 mm'], ['Props','5 in, 3 blades'], ['Battery','6S 1100 mAh'], ['Weight','about 520 g']],
     geo:{ style:'xplate', motors:[{a:35,dir:1},{a:145,dir:-1},{a:215,dir:1},{a:325,dir:-1}], arm:108, armW:13, propR:63, blades:3,
           motorR:14, motorH:17, plateL:96, plateW:34, standH:22, stack:30.5, batt:[70, 34, 34], cells:'6S', propCol:'#f3a6bb' },
-    wt:[30, 30, 128, 14, 8, 22, 16, 22, 185, 18],
+    wt:{frame:30, arms:30, motors:128, esc:14, fc:8, camera:22, wiring:16, shell:22, payload:0, battery:185, props:18},
     fly:{ mass:.52, twr:11, tau:.03, kd:.045, rate:[230, 800, .5], yawRate:[200, 600, .5], modes:['acro', 'angle'], crashV:7,
           uptilt:40, cells:6, mAh:1100, Imax:160, kQ:.016, cam:'fpv' } },
 
@@ -858,7 +905,7 @@ const DL_DRONES = [
     facts:[['Wheelbase','315 mm'], ['Props','7 in, 2 blades'], ['Battery','6S 4000 mAh Li-ion'], ['Weight','about 1050 g']],
     geo:{ style:'xplate', motors:DL_QUAD, arm:158, armW:16, propR:89, blades:2, motorR:17, motorH:20, plateL:120, plateW:48,
           standH:30, stack:30.5, gps:true, batt:[72, 44, 42], cells:'6S Li-ion', propCol:'#93d3b0' },
-    wt:[60, 64, 200, 16, 9, 38, 22, 40, 560, 24],
+    wt:{frame:60, arms:64, motors:200, esc:16, fc:9, camera:38, wiring:22, shell:40, payload:0, battery:560, props:24},
     fly:{ mass:1.05, twr:4.5, tau:.06, kd:.05, rate:[160, 500, .4], yawRate:[150, 400, .4], modes:['acro', 'angle'], crashV:7,
           uptilt:20, cells:6, mAh:4000, Imax:70, kQ:.017, cam:'fpv' } },
 
@@ -867,16 +914,25 @@ const DL_DRONES = [
     facts:[['Wheelbase','65 mm'], ['Props','31 mm, 4 blades'], ['Battery','1S 300 mAh'], ['Weight','28 g']],
     geo:{ style:'duct', whoop:true, motors:DL_QUAD, arm:23, armW:4, propR:15.5, blades:4, motorR:3.6, motorH:8, ductR:17, ductH:12,
           stack:0, batt:[34, 12, 7], cells:'1S', propCol:'#f4b829' },
-    wt:[4.2, 0, 7.6, 0, 3.4, 3.2, .6, 1.2, 7.2, .8],
+    wt:{frame:4.2, arms:0, motors:7.6, esc:0, fc:3.4, camera:3.2, wiring:0.6, shell:1.2, payload:0, battery:7.2, props:0.8},
     fly:{ mass:.028, twr:3.4, tau:.02, kd:.006, rate:[180, 720, .5], yawRate:[180, 600, .5], modes:['acro', 'angle'], crashV:9,
           uptilt:15, cells:1, mAh:300, Imax:7, kQ:.012, cam:'fpv', ducts:true } },
+
+  { id:'attack', name:'Attack Quad', cls:'Strike / target quad', pal:'tomato', ready:true,
+    blurb:'A tall-legged quad with a payload pod slung under the belly: fly it to the range target and put the charge on the bullseye.',
+    facts:[['Wheelbase','264 mm'], ['Props','6 in, 3 blades'], ['Battery','4S 4500 mAh'], ['Weight','about 1.15 kg']],
+    geo:{ style:'strike', motors:DL_QUAD, arm:132, armW:16, propR:76, blades:3, motorR:16, motorH:19, plateL:110, plateW:62,
+          standH:30, stack:30.5, batt:[96, 46, 34], cells:'4S', propCol:'#e2483d' },
+    wt:{frame:105, arms:70, motors:240, esc:18, fc:14, camera:40, wiring:25, shell:110, payload:190, battery:290, props:45},
+    fly:{ mass:1.15, twr:5.2, tau:.05, kd:.06, rate:[190, 620, .5], yawRate:[170, 520, .45], modes:['acro', 'angle'], crashV:7.5,
+          uptilt:25, cells:4, mAh:4500, Imax:90, kQ:.017, cam:'fpv' } },
 
   { id:'hexa', name:'Mapping Hexacopter', cls:'Survey / inspection', pal:'cobalt', ready:true,
     blurb:'Six motors and GPS: flies survey grids by itself, carrying a downward mapping camera.',
     facts:[['Diagonal','960 mm'], ['Props','15 in, 2 blades'], ['Battery','6S 10000 mAh'], ['Weight','about 7 kg']],
     geo:{ style:'round', motors:dlRing(6, 30), arm:480, propR:190, blades:2, motorR:34, gearH:230, plateR:130, gimbal:'map',
           cells:'6S', propCol:'#3d3935' },
-    wt:[900, 600, 960, 300, 180, 650, 220, 260, 2600, 260],
+    wt:{frame:900, arms:600, motors:960, esc:300, fc:180, camera:650, wiring:220, shell:260, payload:0, battery:2600, props:260},
     fly:{ mass:7, twr:2.1, tau:.12, kd:.2, rate:[70, 140, .2], yawRate:[45, 90, .2], modes:['gps', 'angle'], crashV:2.8,
           uptilt:-30, cells:6, mAh:10000, Imax:180, kQ:.019, cam:'gimbal' } },
 
@@ -887,6 +943,32 @@ const DL_DRONES = [
   { id:'vtol', name:'Quadplane VTOL', cls:'Hybrid VTOL', pal:'tomato', ready:false,
     blurb:'Takes off straight up on four lift motors, then a pusher prop and wing take over for efficient cruise.',
     facts:[['Span','1600 mm'], ['Lift','4 x 12 in'], ['Battery','6S 8000 mAh'], ['Weight','about 4.5 kg']] },
+
+  { id:'bolt', name:'Anduril Bolt', cls:'Modular quad AAV', pal:'mustard', ready:true,
+    blurb:'A black faceted quad with four folding arms and a mission module on its spine. It packs into a small case, launches from a clearing and loiters 45 minutes on a gimbal. The M variant swaps the sensor for a warhead and comes down from any angle, including straight from above.',
+    facts:[['Range','+20 km'], ['Endurance','+45 min'], ['Weight','12 lb (5.4 kg)'], ['Battery swap','under 10 s']],
+    geo:{ style:'bolt', motors:DL_QUAD, arm:350, armW:26, propR:228, blades:2, motorR:26, motorH:34, plateL:560, plateW:150,
+          batt:[200, 90, 60], cells:'6S', propCol:'#2a2826', plateR:150, gearH:10 },
+    wt:{frame:750, arms:550, motors:420, esc:80, fc:55, camera:320, wiring:100, shell:350, payload:700, battery:1850, props:165},
+    // its own words for the shared steps: nothing here is a belly pod on a range
+    stepText:{ payload:'The mission module on the spine: sensors, radios or a warhead, latched on without tools. It sits over the centre of mass, so swapping it changes the handling very little.' },
+    fly:{ mass:5.4, twr:2.2, tau:.09, kd:.35, rate:[70, 150, .2], yawRate:[55, 120, .2], modes:['gps', 'sport', 'cine'], crashV:3,
+          uptilt:-5, cells:6, mAh:24000, Imax:86, kQ:.02, cam:'gimbal' } },
+
+  // one mast, one tail rotor. 'arm' and the geo.plate* values are only read by the flight simulator's generic
+  // fallback; the hub station is pinned at the centre with geo.pos so the drawing puts the rotor on the mast.
+  { id:'ghost', name:'Anduril Ghost-X', cls:'Autonomous helicopter', pal:'cobalt', ready:true,
+    blurb:'Not a quad: one mast, two blades and a tail rotor. It folds into a case the size of a rifle, then hovers and stares for 80 minutes with 25 lb of sensors on a rail under the belly.',
+    facts:[['Endurance','80 min'], ['Range','25 km (15.5 mi)'], ['Payload','25 lb (11 kg)'], ['Weight','55 lb (25 kg)']],
+    geo:{ style:'heli', motors:[{a:0, dir:1, noProp:true, arrowR:330, thrustR:430}], pos:[[0, 0]], arm:900, rotorR:1900, blades:2, propR:1900, motorR:110, motorH:80,
+          tailR:260, tailBlades:2, batt:[400, 240, 120], cells:'6S', propCol:'#2a2826', bellCol:'#332f2a', plateR:420, gearH:100 },
+    wt:{frame:4000, boom:800, motors:2400, esc:280, fc:200, camera:1770, wiring:300, shell:2000, payload:2600, battery:9700, rotor:850},
+    stepText:{ motors:'The engine and the gearbox, not four brushless cans: the engine spins fast, the gearbox trades that speed for torque, and the mast carries all 25 kg in tension.',
+               payload:'The payload bay under the belly on a standard rail: a camera, a radar or a cargo pod. A crew slides one out and the next in, and the aircraft re-trims itself.' },
+    // the hub at the top of the mast is a rotor head, not a motor can: it carries the pitch links that fly the blades
+    partText:{ motor:['ROTOR HEAD', 'The top of the mast: blade grips, dampers and the pitch links that twist each blade as it goes round. That once-per-revolution twist is the cyclic.'] },
+    fly:{ mass:25, twr:1.75, tau:.12, kd:.5, rate:[55, 110, .2], yawRate:[60, 120, .3], modes:['gps', 'sport', 'angle'], crashV:2.5,
+          uptilt:-8, cells:6, mAh:106000, Imax:165, kQ:.02, cam:'gimbal', mix:'heli' } },
 ];
 const dlDrone = id => DL_DRONES.find(d => d.id === id) || DL_DRONES[0];
 
@@ -948,6 +1030,59 @@ function coneO(x, y, z0, z1, r, mat, n = 8){ const base = circP(x, y, r, n).map(
 // a box turned to angle a (rad) about z, centred (cx, cy)
 const rotBoxO = (cx, cy, a, l, w, z0, z1, mat, opt) => { const c = Math.cos(a), s = Math.sin(a);
   return solid(prismF([[-l/2, -w/2], [l/2, -w/2], [l/2, w/2], [-l/2, w/2]].map(([u, v]) => [cx + u*c - v*s, cy + u*s + v*c]), z0, z1, z0 > .01), mat, opt); };
+// a square beam between two 3D points (a landing leg, a strut)
+function beamO(a, b, w, mat){
+  const d = nz(sb(b, a)), ref = Math.abs(d[2]) > .9 ? [1, 0, 0] : [0, 0, 1];
+  const u = nz(cr(d, ref)), v = nz(cr(d, u)), h = w/2;
+  const ring = p => [[p[0]+u[0]*h+v[0]*h, p[1]+u[1]*h+v[1]*h, p[2]+u[2]*h+v[2]*h],
+                      [p[0]+u[0]*h-v[0]*h, p[1]+u[1]*h-v[1]*h, p[2]+u[2]*h-v[2]*h],
+                      [p[0]-u[0]*h-v[0]*h, p[1]-u[1]*h-v[1]*h, p[2]-u[2]*h-v[2]*h],
+                      [p[0]-u[0]*h+v[0]*h, p[1]-u[1]*h+v[1]*h, p[2]-u[2]*h+v[2]*h]];
+  const A = ring(a), B = ring(b), F = [];
+  for (let i = 0; i < 4; i++){ const j = (i+1) % 4; F.push([A[i], A[j], B[j], B[i]]); }
+  F.push(A.slice().reverse()); F.push(B);
+  return solid(F, mat);
+}
+// a frustum along x: a tapered nose or a fairing. cz is the centre height of the shape.
+function taperO(x0, x1, hy0, hz0, hy1, hz1, mat, cz = 0){
+  const A = [[x0,-hy0,cz-hz0],[x0,hy0,cz-hz0],[x0,hy0,cz+hz0],[x0,-hy0,cz+hz0]], B = [[x1,-hy1,cz-hz1],[x1,hy1,cz-hz1],[x1,hy1,cz+hz1],[x1,-hy1,cz+hz1]], F = [];
+  for (let i = 0; i < 4; i++){ const j = (i+1) % 4; F.push([A[i], A[j], B[j], B[i]]); }
+  F.push(A.slice().reverse()); F.push(B);
+  return solid(F, mat);
+}
+// a cylinder between two 3D points (a branch, a pipe, a barrel on its side)
+function rodO(a, b, r, mat, n = 8){
+  const d = nz(sb(b, a)), u = nz(cr(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cr(d, u);
+  const ring = p => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI, c = Math.cos(t)*r, s = Math.sin(t)*r;
+    return [p[0] + u[0]*c + v[0]*s, p[1] + u[1]*c + v[1]*s, p[2] + u[2]*c + v[2]*s]; });
+  const A = ring(a), B = ring(b), F = [];
+  for (let i = 0; i < n; i++){ const j = (i+1) % n; F.push([A[i], A[j], B[j], B[i]]); }
+  F.push(A.slice().reverse()); F.push(B);
+  return solid(F, mat);
+}
+// a faceted ball: a low ring of vertices, used for tree crowns, rocks and bushes
+function ballP(cx, cy, cz, r, n = 8, rings = 3){
+  const F = [], pts = [];
+  for (let k = 0; k <= rings; k++){ const phi = k/rings*Math.PI, rr = Math.sin(phi)*r, zz = cz - Math.cos(phi)*r;
+    const ring = Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return [cx + Math.cos(t)*rr, cy + Math.sin(t)*rr, zz]; });
+    pts.push(ring); }
+  for (let k = 0; k < rings; k++) for (let i = 0; i < n; i++){ const j = (i+1) % n; F.push([pts[k][i], pts[k][j], pts[k+1][j], pts[k+1][i]]); }
+  return F;
+}
+// a flat disc facing along x (a painted ring on the target board)
+function discO(x, cy, cz, r, mat, n = 20){
+  const ring = Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return [x, cy + Math.cos(t)*r, cz + Math.sin(t)*r]; });
+  return solid([ring.slice().reverse()], mat);
+}
+// a chamfered rectangle in plan (x along the nose, y across): the faceted outline of a moulded fuselage
+const chamP = (x0, y0, x1, y1, c) => [[x0 + c, y0], [x1 - c, y0], [x1, y0 + c], [x1, y1 - c], [x1 - c, y1], [x0 + c, y1], [x0, y1 - c], [x0, y0 + c]];
+// a flat plate between two x-z outlines, extruded across y (a tail fin, a rudder)
+function slabY(poly, y0, y1, mat){
+  const F = [poly.map(([x, z]) => [x, y0, z]), poly.map(([x, z]) => [x, y1, z])];
+  for (let i = 0; i < poly.length; i++){ const a = poly[i], b = poly[(i + 1) % poly.length];
+    F.push([[a[0], y0, a[1]], [b[0], y0, b[1]], [b[0], y1, b[1]], [a[0], y1, a[1]]]); }
+  return solid(F, mat);
+}
 
 /* ---------- environments ---------- */
 function gateObjs(W, gate, mat){   // a square gate: two posts, a top and a bottom bar, facing along angle a
@@ -964,6 +1099,20 @@ function world(id){
   const tree = (x, y, s = 1, alt = false) => { const h = 3.2*s;
     O(cylO(x, y, 0, h*.45, .22*s, MAT.bark, 5)); O(coneO(x, y, h*.3, h*.85, 1.5*s, alt ? MAT.leaf2 : MAT.leaf, 7)); O(coneO(x, y, h*.62, h*1.25, 1.05*s, alt ? MAT.leaf : MAT.leaf2, 6));
     W.col.push({ t:'cyl', x, y, r:.22*s, z0:0, z1:h*.45 }, { t:'sph', c:[x, y, h*.62], r:1.25*s }, { t:'sph', c:[x, y, h*.98], r:.8*s }); };
+  // a broadleaf tree: trunk, two branches and a rounded crown
+  const broadTree = (x, y, s = 1) => { const h = 2.6*s;
+    O(cylO(x, y, 0, h*.8, .26*s, MAT.bark, 6));
+    for (const [dx, dy, dz] of [[.5, .3, .95], [-.4, .5, 1.05], [.1, -.55, .9]]){
+      O(rodO([x, y, h*.55], [x + dx*s, y + dy*s, h*dz], .11*s, MAT.bark), 'tree');
+      W.col.push({ t:'sph', c:[x + dx*s, y + dy*s, h*dz], r:.62*s }); }
+    O(solid(ballP(x, y, h*1.15, 1.35*s), MAT.leaf2), 'tree');
+    W.col.push({ t:'sph', c:[x, y, h*1.15], r:1.35*s }, { t:'cyl', x, y, r:.26*s, z0:0, z1:h*.8 }); };
+  // a rock: a squat, faceted lump
+  const rock = (x, y, s = 1) => { O(solid(ballP(x, y, s*.45, s), MAT.concrete), 'rock');
+    W.col.push({ t:'sph', c:[x, y, s*.45], r:s*.9 }); };
+  // a bush: a low rounded clump
+  const bush = (x, y, s = 1) => { O(solid(ballP(x, y, s*.4, s*.8), MAT.leaf2), 'bush');
+    W.col.push({ t:'sph', c:[x, y, s*.4], r:s*.7 }); };
   const tufts = (n, R, avoid = () => false) => { for (let i = 0; i < n; i++){ const x = (rnd()*2 - 1)*R, y = (rnd()*2 - 1)*R; if (!avoid(x, y)) W.tufts.push([x, y]); } };
   const stripes = (R, w, col) => { for (let x = -R; x < R; x += 2*w) W.decals.push({ p: rectP(x, -R, x + w, R).map(([u, v]) => [u, v, 0]), col }); };
   const pad = (x, y, s = 1) => { W.decals.push({ p: rectP(x - s, y - s, x + s, y + s).map(([u, v]) => [u, v, 0]), col:'#d8c49a', ink:true });
@@ -980,6 +1129,17 @@ function world(id){
     O(solid([[[-30, -12, 3.2], [-22, -12, 3.2], [-22, -8, 4.6], [-30, -8, 4.6]], [[-22, -4, 3.2], [-30, -4, 3.2], [-30, -8, 4.6], [-22, -8, 4.6]], [[-30, -12, 3.2], [-30, -8, 4.6], [-30, -4, 3.2]], [[-22, -4, 3.2], [-22, -8, 4.6], [-22, -12, 3.2]]], MAT.dark));
     colBox(-30, -12, 3.2, -22, -4, 4.6);
     O(cylO(8, 20, 0, 6, .06, MAT.steel, 5)); O(coneO(8, 20, 5.3, 6, .35, MAT.red, 6)); W.col.push({ t:'cyl', x:8, y:20, r:.06, z0:0, z1:6 });
+    // a second barn, a fence gate and a couple of outbuildings
+    O(boxO(28, 34, 0, 40, 44, 4.2, MAT.brick)); colBox(28, 34, 0, 40, 44, 4.2);
+    O(solid([[[28, 34, 4.2], [40, 34, 4.2], [40, 44, 5.8], [28, 44, 5.8]], [[28, 34, 4.2], [28, 44, 5.8], [40, 44, 5.8], [40, 34, 4.2]]], MAT.dark));
+    colBox(28, 34, 4.2, 40, 44, 5.8);
+    O(boxO(-14, 46, 0, -6, 54, 2.6, MAT.wood)); colBox(-14, 46, 0, -6, 54, 2.6);
+    // a pond, a windmill and some scattered stone
+    O(cylO(-46, 18, 0, .12, 5.5, MAT.blue, 12));
+    O(cylO(-44, 6, 0, 7, .35, MAT.steel, 6)); O(cylO(-44, 6, 6.2, 7, 1.1, MAT.white, 8)); W.col.push({ t:'cyl', x:-44, y:6, r:.35, z0:0, z1:7 });
+    for (const [x, y, s] of [[18, 24, 1.1], [-8, -30, .9], [46, 12, 1.3], [-52, 44, 1]]) rock(x, y, s);
+    for (const [x, y, s] of [[24, -18, 1.2], [-20, 26, 1], [58, 30, 1.4], [-40, -22, 1.1], [8, 40, 1.3]]) bush(x, y, s);
+    for (const [x, y, s] of [[-16, -4, 1.1], [64, -12, 1.3], [-70, 40, 1]]) broadTree(x, y, s);
   }
   if (id === 'course'){
     W.spawn.yaw = 0;
@@ -994,6 +1154,15 @@ function world(id){
     gs.splice(2, 1, { c:[56, 28, 1.1], a:Math.PI, w:2.2, h:2.2, t:.05, hidden:true });
     gs.splice(3, 1, { c:[30.75, 30, 5], a:Math.PI, w:3, h:2, t:.05, hidden:true });
     W.gates = gs; gs.forEach(g => { if (!g.hidden) gateObjs(W, g, MAT.blue).forEach(O); });
+    // more to weave through: sheds, containers, tyre stacks and a treeline
+    for (const [x, y, w, d, h, m] of [[8, 40, 6, 5, 3.4, MAT.brick], [38, 44, 5, 6, 4.2, MAT.concrete], [66, 8, 7, 4, 3.8, MAT.white], [44, -8, 5, 5, 3.2, MAT.mint]]){
+      O(boxO(x, y, 0, x + w, y + d, h, m)); colBox(x, y, 0, x + w, y + d, h);
+      O(boxO(x - .3, y - .3, h, x + w + .3, y + d + .3, h + .4, MAT.dark)); colBox(x - .3, y - .3, h, x + w + .3, y + d + .3, h + .4); }
+    for (const [x, y] of [[24, 14], [52, 38], [16, 34], [62, -4]]){ for (let i = 0; i < 3; i++) O(cylO(x, y, i*.32, i*.32 + .3, .75, MAT.dark, 8));
+      W.col.push({ t:'cyl', x, y, r:.8, z0:0, z1:.95 }); }
+    for (const [x, y, s] of [[2, 22, 1.2], [36, 20, 1], [58, 44, 1.3], [70, 34, 1.1], [24, 48, 1.2], [46, -2, 1]]) tree(x, y, s, rnd() > .5);
+    for (const [x, y, s] of [[12, 30, 1.1], [40, 10, .9], [64, 22, 1.2]]) bush(x, y, s);
+    for (const [x, y, s] of [[34, 52, 1.2], [72, 6, 1]]) rock(x, y, s);
   }
   if (id === 'race'){
     const gs = [];
@@ -1004,6 +1173,15 @@ function world(id){
     gs.forEach((g, i) => { const a = gs[(i + gs.length - 1) % gs.length].c, b = gs[(i + 1) % gs.length].c; g.a = Math.atan2(b[1] - a[1], b[0] - a[0]); });
     W.gates = gs; gs.forEach(g => gateObjs(W, g, MAT.pink).forEach(O));
     for (const [x, y] of [[26, 4], [48, 14], [64, 34], [24, 52], [4, 36]]){ O(cylO(x, y, 0, 3.5, .05, MAT.steel, 5)); O(boxO(x - .02, y, 2.5, x + .02, y + 1, 3.4, MAT.yellow)); W.col.push({ t:'cyl', x, y, r:.06, z0:0, z1:3.5 }); }
+    // a paddock around the track: stands, trees, hay bales and a few buildings
+    for (const [x, y, w, d, h, m] of [[8, 60, 12, 5, 4, MAT.concrete], [64, 58, 10, 6, 3.6, MAT.brick], [-14, 12, 8, 8, 4.5, MAT.white]]){
+      O(boxO(x, y, 0, x + w, y + d, h, m)); colBox(x, y, 0, x + w, y + d, h);
+      O(boxO(x - .4, y - .4, h, x + w + .4, y + d + .4, h + .5, MAT.dark)); colBox(x - .4, y - .4, h, x + w + .4, y + d + .4, h + .5); }
+    for (const [x, y] of [[14, 58], [58, 62], [-8, 18], [40, -8], [70, 20]]){ for (let i = 0; i < 3; i++) O(cylO(x, y, i*.32, i*.32 + .3, .8, MAT.hay, 10));
+      W.col.push({ t:'cyl', x, y, r:.85, z0:0, z1:.95 }); }
+    for (const [x, y, s] of [[2, 40, 1.3], [22, 66, 1.2], [44, 66, 1.4], [66, 44, 1.2], [78, 8, 1.3], [-6, 46, 1.1], [30, -12, 1.2]]) tree(x, y, s, rnd() > .5);
+    for (const [x, y, s] of [[10, 62, 1.2], [70, 60, 1.3], [-2, 8, 1]]) broadTree(x, y, s);
+    for (const [x, y, s] of [[36, 12, 1], [52, 30, 1.2], [18, 44, .9]]) bush(x, y, s);
   }
   if (id === 'city'){
     W.ground = '#b7b2a6'; W.sky = '#dde6ea'; W.hills = false; W.spawn = { p:[0, 0], yaw:0 }; W.pilot = [-5, -6, 1.6];
@@ -1027,7 +1205,20 @@ function world(id){
           const wp = [[a0[0] + dx*.08, a0[1] + dy*.08, z], [a0[0] + dx*.92, a0[1] + dy*.92, z], [a0[0] + dx*.92, a0[1] + dy*.92, z + 1.4], [a0[0] + dx*.08, a0[1] + dy*.08, z + 1.4]];
           bo.faces.push({ p: wp, n: newell(wp), mat: MAT.glass }); } }
         if (h > 14) { O(boxO(bx0 + 3, by0 + 3, h, bx0 + 6, by0 + 5, h + 1.5, MAT.steel)); colBox(bx0 + 3, by0 + 3, h, bx0 + 6, by0 + 5, h + 1.5); }
+        // a roof tank on some of the taller blocks
+        if (h > 22 && rnd() < .5){ O(cylO(bx0 + 5, by0 + 5, h + 1.5, h + 4.5, 1.8, MAT.steel, 8)); O(coneO(bx0 + 5, by0 + 5, h + 4.5, h + 5.6, 2, MAT.dark, 8));
+          W.col.push({ t:'cyl', x:bx0 + 5, y:by0 + 5, r:1.8, z0:h + 1.5, z1:h + 4.5 }); }
       } }
+    // street furniture and trees along the avenues
+    for (let i = -3; i <= 3; i++) for (const s of [-1, 1]) for (let k = -140; k < 140; k += 28){
+      const x = i*(block + road) + s*(road/2 + 1.6), y = k + 14;
+      if (rnd() < .45){ tree(x, y, .9 + rnd()*.5, rnd() > .5); continue; }
+      O(cylO(x, y, 0, 4.4, .09, MAT.steel, 5)); O(boxO(x - .04, y - .04, 4.4, x + .04, y + .04, 4.8, MAT.yellow));
+      W.col.push({ t:'cyl', x, y, r:.09, z0:0, z1:4.8 }); }
+    // a rooftop helipad on one corner block
+    O(boxO(-14, -14, 0, -6, -6, 1.2, MAT.concrete)); colBox(-14, -14, 0, -6, -6, 1.2);
+    O(cylO(-10, -10, 1.2, 1.3, 3.2, MAT.dark, 12));
+    for (const [x, y, s] of [[12, 22, 1.2], [-24, 16, 1], [26, -20, 1.3], [-30, -28, 1.1], [44, 46, 1.4]]) bush(x, y, s);
     tufts(500, 160);
   }
   if (id === 'forest'){
@@ -1035,10 +1226,24 @@ function world(id){
     tufts(1800, 80, (x, y) => false);
     for (let i = 0; i < 170; i++){ const x = (rnd()*2 - 1)*85, y = (rnd()*2 - 1)*85;
       if (Math.hypot(x, y) < 9 || (Math.abs(y - x*.3) < 3.5 && x > 0)) continue; tree(x, y, .8 + rnd()*1.1, rnd() > .5); }
+    // a denser understorey: broadleaf trees, bushes and fallen logs
+    for (let i = 0; i < 70; i++){ const x = (rnd()*2 - 1)*80, y = (rnd()*2 - 1)*80;
+      if (Math.hypot(x, y) < 11 || (Math.abs(y - x*.3) < 4.5 && x > 0)) continue;
+      if (rnd() < .45) broadTree(x, y, .8 + rnd()*.8); else bush(x, y, .8 + rnd()*.7); }
+    for (let i = 0; i < 14; i++){ const x = (rnd()*2 - 1)*75, y = (rnd()*2 - 1)*75; if (Math.hypot(x, y) < 9) continue;
+      const a = rnd()*Math.PI*2, len = 3 + rnd()*3, dx = Math.cos(a)*len, dy = Math.sin(a)*len;
+      O(rodO([x, y, .35], [x + dx, y + dy, .35], .35, MAT.bark, 6));
+      W.col.push({ t:'obox', c:[x + dx/2, y + dy/2], a, hx:len/2, hy:.35, z0:0, z1:.7 }); }
     for (let i = 0; i < 12; i++){ const x = (rnd()*2 - 1)*70, y = (rnd()*2 - 1)*70; if (Math.hypot(x, y) < 9) continue; const r = .4 + rnd()*.8; O(cylO(x, y, 0, r*1.1, r, MAT.concrete, 6)); W.col.push({ t:'cyl', x, y, r, z0:0, z1:r*1.1 }); }
+    for (let i = 0; i < 16; i++){ const x = (rnd()*2 - 1)*78, y = (rnd()*2 - 1)*78; if (Math.hypot(x, y) < 9) continue; rock(x, y, .5 + rnd()*.7); }
     O(rotBoxO(6, -5, .4, 7, .5, 0, .5, MAT.bark)); W.col.push({ t:'obox', c:[6, -5], a:.4, hx:3.5, hy:.25, z0:0, z1:.5 });
     W.decals.push({ p: [[0, -1.6, 0], [90, 25.4, 0], [90, 29.4, 0], [0, 1.6, 0]], col:'#c8b48a' });
     pad(0, 0);
+    // a ranger's cabin on a clearing
+    O(boxO(-30, 26, 0, -22, 34, 3, MAT.wood)); colBox(-30, 26, 0, -22, 34, 3);
+    O(solid([[[-31, 25, 3], [-21, 25, 3], [-21, 35, 5], [-31, 35, 5]], [[-31, 25, 3], [-31, 35, 5], [-21, 35, 5], [-21, 25, 3]]], MAT.dark));
+    colBox(-31, 25, 3, -21, 35, 5);
+    O(cylO(-26, 30, 5, 7.4, .45, MAT.brick, 6)); W.col.push({ t:'cyl', x:-26, y:30, r:.45, z0:5, z1:7.4 });
   }
   if (id === 'room'){
     W.ground = '#d9a86c'; W.sky = '#efe6d2'; W.hills = false; W.far = 60; W.haze = '#efe6d2'; W.spawn = { p:[0, 0], yaw:0 }; W.pilot = [-2.4, -1.8, 1.2];
@@ -1054,21 +1259,60 @@ function world(id){
     furn(2.6, -2.5, 0, 3.15, -.6, 1.9, MAT.wood); for (const z of [.5, 1, 1.45]) furn(2.55, -2.5, z, 2.6, -.6, z + .03, MAT.bark);
     furn(-3.1, -2.5, 0, -2.4, -2, .75, MAT.white); furn(-2.9, -2.4, .75, -2.55, -2.1, 1.2, MAT.yellow);
     O(cylO(-2.6, 1.9, 0, .35, .25, MAT.red, 8)); O(coneO(-2.6, 1.9, .35, 1.4, .3, MAT.leaf, 7)); W.col.push({ t:'cyl', x:-2.6, y:1.9, r:.3, z0:0, z1:1.4 });
+    // more furniture: a bookshelf, a side table, a lamp, a rug and a cat basket
+    furn(-3.1, .4, 0, -2.75, 1.7, 1.5, MAT.wood);
+    for (const z of [.35, .75, 1.15]) furn(-3.05, .45, z, -2.8, 1.65, z + .3, z < 1.2 ? MAT.mint : MAT.yellow);
+    furn(.9, -2.4, 0, 1.5, -1.8, .5, MAT.wood);
+    furn(-1.7, -2.3, 0, -1.4, -2.05, 1.25, MAT.steel);
+    O(coneO(-1.55, -2.17, 1.25, 1.55, .22, MAT.white, 8));
+    W.decals.push({ p: rectP(-1.9, -1.1, -.6, .3).map(([u, v]) => [u, v, .004]), col:'#5a82c6', ink:true });
+    furn(1.8, 1.4, 0, 2.5, 2.1, .3, MAT.yellow);
     // two small gates to fly through
     W.gates = [{ c:[1.6, -1.2, 1.3], a:0, w:.6, h:.6, t:.04 }, { c:[-1.2, -1.8, 1.6], a:Math.PI, w:.6, h:.6, t:.04 }];
     W.gates.forEach(g => gateObjs(W, g, MAT.pink).forEach(o => { O(o); }));
     W.spawn.p = [-1.8, .2];
+  }
+  if (id === 'range'){
+    W.ground = '#b9c48f'; W.sky = '#dfe8e6'; W.haze = '#ece9df'; W.far = 300; W.hills = true;
+    W.spawn = { p:[0, 0], yaw:0 }; W.pilot = [-9, -12, 2.2];
+    // a graded range floor with a firing strip down the middle
+    W.decals.push({ p: rectP(-6, -16, 132, 16).map(([u, v]) => [u, v, 0]), col:'#cbb488' });
+    for (let x = 20; x < 132; x += 20) W.decals.push({ p: rectP(x, -16, x + .5, 16).map(([u, v]) => [u, v, .01]), col:'#efe3c4' });
+    pad(0, 0);
+    // distance markers down the range
+    for (let x = 20; x < 130; x += 20){ const y = 13;
+      O(boxO(x - .2, y, 0, x + .2, y + .2, 1.8, MAT.white)); colBox(x - .2, y, 0, x + .2, y + .2, 1.8);
+      O(boxO(x - .9, y - .05, 1.8, x + .9, y + .25, 2.6, MAT.red)); colBox(x - .9, y - .05, 1.8, x + .9, y + .25, 2.6); }
+    // hangars and a treeline along the sides
+    for (const [x, y, w, d, h, m] of [[28, -32, 14, 10, 6, MAT.steel], [66, 28, 12, 14, 7, MAT.brick], [96, -26, 16, 12, 5, MAT.concrete]]){
+      O(boxO(x, y, 0, x + w, y + d, h, m)); colBox(x, y, 0, x + w, y + d, h);
+      O(boxO(x - .6, y - .6, h, x + w + .6, y + d + .6, h + .8, MAT.dark)); colBox(x - .6, y - .6, h, x + w + .6, y + d + .6, h + .8); }
+    for (const [x, y, s] of [[16, 22, 1.3], [44, 26, 1.1], [60, -22, 1.4], [88, 22, 1.2], [110, -18, 1.3], [34, -12, 1.1], [76, 12, 1.2]]) tree(x, y, s, rnd() > .5);
+    for (const [x, y, s] of [[24, 14, 1.2], [52, 18, 1], [102, 18, 1.3]]) broadTree(x, y, s);
+    for (const [x, y, s] of [[38, -10, 1.1], [84, -8, 1.2], [70, 34, 1]]) bush(x, y, s);
+    for (const [x, y, s] of [[46, 8, 1], [94, 34, 1.2]]) rock(x, y, s);
+    // the target board at the far end: a white panel with painted rings
+    const TX = 120, TZ = 9, BR = 6;
+    for (const s of [-1, 1]){ O(boxO(TX + .3, s*(BR - 1.2) - .35, 0, TX + 1.3, s*(BR - 1.2) + .35, TZ, MAT.steel)); colBox(TX + .3, s*(BR - 1.2) - .35, 0, TX + 1.3, s*(BR - 1.2) + .35, TZ); }
+    O(boxO(TX + .3, -BR + 1, 0, TX + 1.3, BR - 1, 1, MAT.steel)); colBox(TX + .3, -BR + 1, 0, TX + 1.3, BR - 1, 1);
+    O(boxO(TX, -BR, TZ - BR, TX + .5, BR, TZ + BR, MAT.white));
+    W.col.push({ t:'box', mn:[TX, -BR, TZ - BR], mx:[TX + .5, BR, TZ + BR], tgt:true, noStand:true });
+    O(discO(TX - .02, 0, TZ, 4.2, MAT.red));
+    O(discO(TX - .04, 0, TZ, 2.8, MAT.white));
+    O(discO(TX - .06, 0, TZ, 1.5, MAT.red));
+    W.target = { x: TX, y: 0, z: TZ, bull: 1.5, r: BR };
   }
   if (W.hills){ const n = 28; for (let i = 0; i < n; i++){ const a0 = i/n*2*Math.PI, a1 = (i + 1)/n*2*Math.PI, R = 600, h = 25 + 35*Math.abs(Math.sin(i*1.7));
     O(solid([[[R*Math.cos(a0), R*Math.sin(a0), 0], [R*Math.cos(a1), R*Math.sin(a1), 0], [R*.98*Math.cos((a0 + a1)/2), R*.98*Math.sin((a0 + a1)/2), h]]], MAT.leaf2, { bg:true })); }
     for (const o of W.objs) if (o.bg && o.faces.length === 1){ const fc = o.faces[0]; if (dt3(fc.n, nz([-o.c[0], -o.c[1], 0])) < 0) fc.n = sc(fc.n, -1); } }
   return W;
 }
-const ENVS = [['field', 'Open field'], ['course', 'Obstacle course'], ['race', 'Race gates'], ['city', 'City blocks'], ['forest', 'Forest'], ['room', 'Living room (whoops)']];
+const ENVS = [['field', 'Open field'], ['course', 'Obstacle course'], ['race', 'Race gates'], ['city', 'City blocks'], ['forest', 'Forest'], ['room', 'Living room (whoops)'], ['range', 'Target range']];
 
 /* ---------- the drone: flight model from the same geometry as the assembly view ---------- */
 function dronePos(D){ const g = D.geo;
   if (g.style === 'shell') return [[88, 104], [-86, 98], [-86, -98], [88, -104]].map(([x, y]) => [x/1000, y/1000]);
+  if (g.pos) return g.pos.map(([x, y]) => [x/1000, y/1000]);        // one mast: the hub sits on the centre line
   return g.motors.map(m => [g.arm*Math.cos(m.a*Math.PI/180)/1000, g.arm*Math.sin(m.a*Math.PI/180)/1000]); }
 function buildCraft(D){
   const g = D.geo, F = D.fly, k = .001, pal = PALS[D.pal] ? MT(PALS[D.pal].l) : MAT.red, parts = [];
@@ -1103,7 +1347,128 @@ function buildCraft(D){
     pos.forEach(([x, y], i) => { const front = x > 0, hx = front ? .054 : -.064, hz = front ? .03 : .016;
       put(rotBoxO((x + hx)/2, (y + Math.sign(y)*.029)/2, Math.atan2(y - Math.sign(y)*.029, x - hx), Math.hypot(x - hx, y - Math.sign(y)*.029), .01, hz - .005, hz + .005, MAT.white), 'arm' + i);
       put(cylO(x, y, front ? .026 : 0, mz[i], .0095, MAT.white, 8), 'arm' + i); if (front) put(cylO(x, y, 0, .026, .0025, MAT.white, 5), 'arm' + i); });
-    zP = .052; h = .06; zCom = .028;
+    zP = .052; h = .06;    zCom = .028;
+  } else if (g.style === 'strike'){
+    const SL = DL_STRIKE(g), k = .001, L = g.plateL*k, Wd = g.plateW*k;
+    const zB = SL.leg*k, zA = SL.zA*k, zA1 = SL.zA1*k, zC = SL.zC*k, zE = SL.zE*k, zF = SL.zF*k, T0 = SL.T0*k;
+    zP = (SL.zA1 + g.motorR*.22 + g.motorH + 1.2)*k; h = T0 + g.batt[2]*k;
+    const corners = [[L/2 - .014, Wd/2 - .009], [L/2 - .014, -Wd/2 + .009], [-L/2 + .014, Wd/2 - .009], [-L/2 + .014, -Wd/2 + .009]];
+    // long splayed legs
+    for (const [x, y] of corners){ put(beamO([x*1.1, y*1.22, .003], [x, y, zB], .009, carbon), 'gear');
+      put(cylO(x*1.1, y*1.22, 0, .003, .007, MAT.dark, 8), 'gear'); }
+    put(boxO(-L/2, -Wd/2, zB, L/2, Wd/2, zA, carbon), 'body');
+    pos.forEach(([x, y], i) => put(rotBoxO(x/2, y/2, Math.atan2(y, x), Math.hypot(x, y), g.armW*k, zA, zA1, carbon), 'arm' + i));
+    put(boxO(-L/2 + .004, -Wd/2 + .002, zA1, L/2 - .022, Wd/2 - .002, zC, carbon), 'body');
+    const s2 = SL.s2*k;
+    put(boxO(-s2, -s2, zE, s2, s2, zE + .0016, MT('#3f8f5a')), 'body');
+    put(boxO(-s2, -s2, zF, s2, s2, zF + .0016, MT('#4b4f9e')), 'body');
+    // camera and video gear at the nose
+    put(boxO(L/2 - .021, -.0095, zC + .005, L/2 - .002, .0095, zC + .024, MT('#2b2826')), 'body');
+    put(cylO(-.014, 0, zF + .0036, zF + .0076, .008, MAT.dark, 8), 'body');
+    // top plate and battery
+    put(boxO(-L/2, -Wd/2, T0, L/2, Wd/2, T0 + .0025, carbon), 'body');
+    const [bl, bw2, bh] = g.batt.map(v => v*k), bx1 = bl/2, bx0 = bx1 - bl;
+    put(boxO(bx0, -bw2/2, T0 + .0025, bx1, bw2/2, T0 + .0025 + bh, batt), 'batt');
+    // the payload pod slung under the belly
+    const P = SL.pod, pz0 = P.z0*k, pz1 = P.z1*k, px0 = P.x0*k, px1 = P.x1*k, phy = P.hy*k;
+    put(boxO(px0, -phy, pz0, px1, phy, pz1, MT('#3f4750')), 'body');
+    put(taperO(px1, px1 + P.nose*k, phy, (pz1 - pz0)/2, .005, .003, MT('#c9ccce'), (pz0 + pz1)/2), 'body');
+    for (const s of [-1, 1]) put(boxO(px0, s > 0 ? phy : -phy - .003, pz0 + .003, px0 + .018, s > 0 ? phy + .003 : -phy, pz0 + .031, MT('#c94f3d')), 'body');
+    put(boxO(px0, -.0025, pz1, px0 + .016, .0025, pz1 + .015, MT('#c94f3d')), 'body');
+    put(boxO(px0, -.0025, pz0, px0 + .016, .0025, pz0 + .012, MT('#c94f3d')), 'body');
+    zCom = T0*.6;
+  } else if (g.style === 'bolt'){
+    // faceted black quad: the same decks as the assembly drawing (belly 38 mm, deck 178 mm, module 258 mm)
+    const L = g.plateL*k, hy = g.plateW*k/2, Zb = 38*k, Zd = 178*k, Zm = 258*k, Rb = g.motorR*k;
+    const blk = MT('#2a2826'), dk = MT('#1d1b19'), sil = MAT.steel, bw2 = g.batt[1]*k;
+    zP = (130 + g.motorR*.22 + g.motorH + 1.5)*k; h = 322*k; zCom = 150*k;
+    // it stands on two flat rails, high enough that the gimbal ball under the nose clears the ground
+    for (const s of [-1, 1]){
+      put(boxO(-235*k, s > 0 ? 58*k : -80*k, 0, 235*k, s > 0 ? 80*k : -58*k, 10*k, dk), 'gear');
+      for (const sx of [-1, 1]) put(beamO([sx*206*k, s*70*k, 8*k], [sx*196*k, s*58*k, Zb], 9*k, dk), 'gear');
+    }
+    // belly plate, then the faceted body: an octagonal plan from belly to deck, tapering to a squared nose
+    put(boxO(-L/2 + 14*k, -hy + 12*k, Zb, L/2 - 14*k, hy - 12*k, Zb + 9*k, carbon), 'body');
+    put(solid(prismF(chamP(-L/2, -hy, 170*k, hy, 30*k), Zb + 6*k, Zd, true), blk), 'body');
+    put(taperO(170*k, L/2 + 20*k, hy, (Zd - Zb)/2 - 4*k, 34*k, 40*k, blk, (Zd + Zb)/2), 'body');
+    // the silver heat-sink spine with its fine ribs
+    put(boxO(-L/2 + 8*k, -30*k, Zd, 150*k, 30*k, Zd + 6*k, sil), 'body');
+    for (let i = 0; i < 9; i++){ const x = -L/2 + 16*k + i*44*k; put(boxO(x, -30*k, Zd + 6*k, x + 9*k, 30*k, Zd + 13*k, sil), 'body'); }
+    // the latched mission module on the spine, with a painted nose cap and heat-sink strips
+    put(solid(prismF(chamP(-120*k, -58*k, 86*k, 58*k, 18*k), 190*k, Zm, true), dk), 'module');
+    put(taperO(86*k, 116*k, 58*k, 34*k, 27*k, 30*k, pal, 224*k), 'module');
+    put(taperO(-146*k, -120*k, 27*k, 30*k, 58*k, 34*k, dk, 224*k), 'module');
+    for (let i = 0; i < 5; i++){ const x = -104*k + i*40*k; put(boxO(x, -38*k, Zm - 5*k, x + 9*k, 38*k, Zm + 3*k, sil), 'module'); }
+    // GPS puck aft of the module, two antenna whips, and the one-hand carry loop
+    put(boxO(-266*k, -17*k, Zd, -228*k, 17*k, Zd + 9*k, MT('#2f3640')), 'body');
+    for (const s of [-1, 1]) put(rodO([-204*k, 40*k*s, Zd], [-220*k, 62*k*s, Zd + 44*k], 2.4*k, blk), 'body');
+    for (const x of [126*k, 158*k]) put(boxO(x, -6*k, Zd, x + 7*k, 6*k, Zd + 32*k, blk), 'body');
+    put(boxO(126*k, -6*k, Zd + 32*k, 165*k, 6*k, Zd + 38*k, blk), 'body');
+    // the spherical gimbal under the nose on a two-cheek yoke
+    const gx = L/2 - 42*k, gz = 82*k, gr = 56*k;
+    put(solid(ballP(gx, 0, gz, gr, 8, 3), dk), 'body');
+    for (const s of [-1, 1]) put(rodO([gx - 34*k, 40*k*s, Zb + 2*k], [gx - 4*k, (gr - 6*k)*s, gz + 8*k], 7*k, sil), 'body');
+    put(rodO([gx + gr*.5, 0, gz], [gx + gr*.98, 0, gz], 26*k, MT('#141312')), 'body');
+    put(rodO([gx + gr*.98, 0, gz], [gx + gr*1.02, 0, gz], 17*k, MT('#4b6b9a')), 'body');
+    // the pack sits low in the belly, under the deck
+    put(boxO(-195*k, -45*k, 44*k, 5*k, 45*k, 104*k, MT('#2f6f8f')), 'batt');
+    for (const x of [-160*k, -90*k]) put(boxO(x - 7*k, -bw2/2 - 1.6*k, 104*k, x + 7*k, bw2/2 + 1.6*k, 106*k, pal), 'batt');
+    // four straight arms on vertical fold pins, exactly where the drawing puts them
+    pos.forEach(([x, y], i) => { const a = g.motors[i].a*Math.PI/180;
+      put(rotBoxO(x/2, y/2, Math.atan2(y, x), Math.hypot(x, y), 42*k, 112*k, 126*k, blk), 'arm' + i);
+      put(cylO(84*k*Math.cos(a), 84*k*Math.sin(a), 104*k, 134*k, 11*k, sil, 12), 'arm' + i);
+      put(cylO(x, y, 126*k, 132*k, Rb*1.35, blk, 16), 'arm' + i); });
+  } else if (g.style === 'heli'){
+    // one mast, a slab body, a long tapering boom, a fin and two skids: the same decks as the assembly drawing
+    const blk = MT('#26241f'), dk = MT('#1b1a18'), sil = MAT.steel;
+    zCom = 0; zP = 812*k; h = 860*k;
+    // keel beam, then the moulded body: a chamfered slab, a squared nose and a cowling hump behind the mast
+    put(boxO(-840*k, -130*k, 296*k, 700*k, 130*k, 320*k, carbon), 'body');
+    put(solid(prismF(chamP(-900*k, -210*k, 620*k, 210*k, 55*k), 320*k, 640*k, true), blk), 'body');
+    put(taperO(620*k, 900*k, 210*k, 160*k, 122*k, 90*k, blk, 480*k), 'body');
+    put(boxO(-600*k, -150*k, 632*k, -90*k, 150*k, 706*k, blk), 'body');
+    for (const s of [-1, 1]) put(boxO(-330*k, s > 0 ? 208*k : -212*k, 360*k, 140*k, s > 0 ? 212*k : -208*k, 560*k, MT('#302e2a')), 'body');
+    // the boom tapers aft to the tail gearbox
+    put(rodO([-620*k, 0, 470*k], [-1450*k, 0, 470*k], 76*k, blk, 10), 'boom');
+    put(rodO([-1450*k, 0, 470*k], [-1900*k, 0, 470*k], 66*k, blk, 10), 'boom');
+    put(rodO([-1900*k, 0, 470*k], [-2350*k, 0, 470*k], 54*k, blk, 10), 'boom');
+    // the fin: a slab the tail gearbox and rotor hang on, with a painted tip
+    put(slabY([[-2354*k, 336*k], [-2286*k, 336*k], [-2286*k, 690*k], [-2312*k, 806*k], [-2354*k, 762*k]], -13*k, 13*k, blk), 'boom');
+    put(slabY([[-2318*k, 756*k], [-2350*k, 748*k], [-2350*k, 762*k], [-2312*k, 806*k]], 13*k, 18*k, pal), 'boom');
+    // the tail skid keeps the boom off the ground when it sits tail-down
+    put(rodO([-2140*k, 0, 430*k], [-2140*k, 0, 14*k], 9*k, blk), 'gear');
+    put(boxO(-2192*k, -42*k, 0, -2088*k, 42*k, 14*k, MT('#232120')), 'gear');
+    // mast, swashplate and rotor head
+    put(cylO(0, 0, 588*k, 708*k, 26*k, sil, 12), 'mast');
+    put(cylO(0, 0, 660*k, 676*k, 74*k, sil, 18), 'rotor');
+    put(cylO(0, 0, 700*k, 812*k, 42*k, blk, 12), 'rotor');
+    // the nose sensor ball on a fork, with its lens
+    put(solid(ballP(760*k, 0, 240*k, 185*k, 10, 3), MT('#191817')), 'body');
+    for (const s of [-1, 1]) put(rodO([690*k, 96*k*s, 340*k], [754*k, (185 - 6)*k*s, 270*k], 15*k, blk), 'camera');
+    put(rodO([849*k, 0, 240*k], [944*k, 0, 240*k], 54*k, MT('#121110')), 'camera');
+    put(rodO([944*k, 0, 240*k], [950*k, 0, 240*k], 37*k, MT('#4b6b9a')), 'camera');
+    // the payload bay on two rails under the keel
+    put(boxO(-310*k, -160*k, 110*k, 310*k, 160*k, 296*k, MT('#33302b')), 'body');
+    for (const s of [-1, 1]) put(boxO(-326*k, s > 0 ? 118*k : -142*k, 292*k, 326*k, s > 0 ? 142*k : -118*k, 306*k, sil), 'body');
+    put(boxO(-110*k, -96*k, 104*k, 130*k, 96*k, 112*k, MT('#2b3a44')), 'body');
+    // two packs in the side bays, with straps over them
+    for (const s of [-1, 1]){
+      put(boxO(-350*k, s > 0 ? 150*k : -212*k, 336*k, 150*k, s > 0 ? 212*k : -150*k, 470*k, MT('#39434b')), 'batt');
+      put(boxO(-70*k, s > 0 ? 146*k : -216*k, 460*k, -54*k, s > 0 ? 216*k : -146*k, 474*k, MT('#2a2e33')), 'batt');
+    }
+    // skids: two wide rails on four struts, so the chin sensor has clearance
+    for (const s of [-1, 1]){
+      put(boxO(-600*k, s > 0 ? 288*k : -306*k, 0, 500*k, s > 0 ? 306*k : -288*k, 22*k, blk), 'gear');
+      for (const x of [-380*k, 300*k]) put(rodO([x, 296*k*s, 20*k], [x*.88, 176*k*s, 320*k], 9*k, blk), 'gear');
+    }
+    // GPS on the nose deck, a stub antenna above the mast and a whip on the boom
+    put(boxO(420*k, -58*k, 636*k, 540*k, 58*k, 648*k, MT('#2f3640')), 'body');
+    put(rodO([-80*k, 0, 636*k], [-80*k, 0, 708*k], 5*k, blk), 'body');
+    put(rodO([-1500*k, 64*k, 500*k], [-1760*k, 74*k, 330*k], 3.5*k, blk), 'boom');
+    // exhausts over the deck, and the tail gearbox + hub the blades bolt to
+    for (const s of [-1, 1]) put(rodO([-150*k, 118*k*s, 620*k], [-250*k, 132*k*s, 700*k], 18*k, dk), 'body');
+    put(boxO(-2342*k, 14*k, 528*k, -2284*k, 62*k, 596*k, blk), 'boom');
+    put(rodO([-2315*k, 50*k, 560*k], [-2315*k, 118*k, 560*k], 22*k, dk), 'boom');
   } else {
     const Rp = g.plateR*k, kk = g.plateR/165, Gh = g.gearH*k, zt = Gh + .0165*kk; zP = Gh + (31*kk + g.motorR*.87 + 3)*k; h = Gh + .2*kk;
     put(cylO(0, 0, Gh, Gh + .031*kk, Rp, carbon, 12), 'body'); put(cylO(0, 0, Gh + .031*kk, Gh + .031*kk + .4*Rp*.6, .55*Rp, pal, 10), 'body');
@@ -1115,16 +1480,23 @@ function buildCraft(D){
     zCom = Gh;
   }
   const mR = g.motorR*k;
-  pos.forEach(([x, y], i) => { const zb = g.style === 'shell' ? [.04, .026, .026, .04][i] : zP - (g.motorH || g.motorR*.65)*k - .002;
+  if (g.style !== 'heli') pos.forEach(([x, y], i) => { const zb = g.style === 'shell' ? [.04, .026, .026, .04][i] : zP - (g.motorH || g.motorR*.65)*k - .002;
     put(cylO(x, y, zb, zP - .001, mR, pal, 8), 'arm' + i); });
   const zPs = pos.map((_, i) => g.style === 'shell' ? [.052, .038, .038, .052][i] : zP);
   // move the origin to the centre of mass
   for (const p of parts) for (const fc of p.o.faces) for (const q of fc.p) q[2] -= zCom;
   for (const p of parts){ p.o.mn[2] -= zCom; p.o.mx[2] -= zCom; p.o.c[2] -= zCom; }
   const armR = Math.max(...pos.map(([x, y]) => Math.hypot(x, y)));
-  const I = F.mass*armR*armR*.42;
-  return { D, parts, n, pos, dirs: g.motors.map(m => m.dir), props: pos.map(([x, y], i) => ({ x, y, z: zPs[i] - zCom + .002, r: g.propR*k, dir: g.motors[i].dir, col: g.propCol })),
-    foot: zCom, rad: armR + (g.style === 'duct' ? (g.ductR + 3)*k : g.propR*k*.8), I: [I, I, I*1.7], h };
+  const charR = g.style === 'heli' ? .95 : armR;        // one hub at the centre: the inertia comes from the body, not an arm
+  const I = F.mass*charR*charR*.42;
+  // a helicopter's blades are not four props: the main rotor turns about the mast, the tail rotor about the y axis
+  const props = g.style === 'heli'
+    ? [{ x: 0, y: 0, z: zP - zCom + .002, r: g.rotorR*k, dir: 1, blades: g.blades, ch: 0, col: g.propCol },
+       { x: -2315*k, y: 130*k, z: 560*k - zCom + .002, r: g.tailR*k, dir: 1, blades: g.tailBlades, ch: 0, spinK: 2.6, plane: 'xz', col: g.propCol }]
+    : pos.map(([x, y], i) => ({ x, y, z: zPs[i] - zCom + .002, r: g.propR*k, dir: g.motors[i].dir, col: g.propCol }));
+  return { D, parts, n, pos, dirs: g.motors.map(m => m.dir), props,
+    foot: g.style === 'heli' ? 0 : zCom, rad: g.style === 'heli' ? 1.15 : armR + (g.style === 'duct' ? (g.ductR + 3)*k : g.propR*k*.8), I: [I, I, I*1.7], h,
+    camOff: g.style === 'heli' ? [760*k, 0, 240*k - zCom] : null };
 }
 
 /* ---------- settings ---------- */
@@ -1140,10 +1512,21 @@ const modeNames = { acro:'Acro', angle:'Angle', gps:'GPS', sport:'Sport', cine:'
 function rates(){ const r = SET.rates[D.id] || {}; return { c: r.c ?? D.fly.rate[0], m: r.m ?? D.fly.rate[1], e: r.e ?? D.fly.rate[2], y: r.y ?? D.fly.yawRate[1], up: r.up ?? D.fly.uptilt, fov: r.fov ?? (D.fly.cam === 'fpv' ? 120 : 84) }; }
 function newState(){
   const sp = W.spawn, yaw = sp.yaw;
-  return { pos:[sp.p[0], sp.p[1], CR.foot + surfaceAt(sp.p[0], sp.p[1], .1)], vel:[0,0,0], R: rotZ(yaw), w:[0,0,0], T: Array(CR.n).fill(0), Tc: Array(CR.n).fill(0), iErr:[0,0,0],
+  return { pos:[sp.p[0], sp.p[1], CR.foot + surfaceAt(sp.p[0], sp.p[1], .1)], vel:[0,0,0], R: rotZ(yaw), w:[0,0,0], T: Array(CR.n).fill(0), Tc: Array(CR.n).fill(0), Tt: 0, iErr:[0,0,0],
     armed:false, crashed:null, used:0, cellV:4.2, amps:0, t:0, flightT:0, ground:true, mode: S && D.fly.modes.includes(S.mode) ? S.mode : D.fly.modes[0], spin: Array(CR.n).fill(0),
-    debris:[], gate:0, lapT:null, lapStart:null, best: store.get('dl-best-' + W.id + '-' + D.id, null), lastLap:null, crashes: S ? S.crashes : 0, msg:'', msgT:0, paused:false, armSwitchSeen:false, landT:0 };
+    debris:[], gate:0, lapT:null, lapStart:null, best: store.get('dl-best-' + W.id + '-' + D.id, null), lastLap:null, crashes: S ? S.crashes : 0, msg:'', msgT:0, paused:false, armSwitchSeen:false, landT:0,
+    takeoffT:null, runT:0, hit:null, hits:0 };
 }
+/* ---------- the target range: leaderboard of the fastest strikes ---------- */
+const LB_KEY = 'dl-leaderboard';
+const lbAll = () => store.get(LB_KEY, []);
+const lbAdd = (t, bull) => { const l = lbAll(); l.push({ t, bull, drone: D.id, name: D.name, when: Date.now() });
+  l.sort((a, b) => a.t - b.t); store.set(LB_KEY, l.slice(0, 30)); };
+const lbFor = () => lbAll().filter(e => e.drone === D.id);
+const lbBest = () => { const l = lbFor(); return l.length ? l[0].t : null; };
+const lbRank = t => { let r = 0; for (const e of lbAll()) if (e.t <= t) r++; return r; };
+function recordHit(t, bull){ lbAdd(t, bull); }
+
 function load(){
   CR = buildCraft(D); W = world(SET.env); S = newState(); SET.drone = D.id; saveSet();
   document.getElementById('bBuild').href = 'drone-assembly.html?d=' + D.id;
@@ -1151,7 +1534,7 @@ function load(){
 
 /* ---------- surfaces and collisions ---------- */
 function surfaceAt(x, y, zMax){ let h = 0;
-  for (const c of W.col) if (c.t === 'box' && x >= c.mn[0] && x <= c.mx[0] && y >= c.mn[1] && y <= c.mx[1] && c.mx[2] <= zMax + .02 && c.mx[2] > h) h = c.mx[2];
+  for (const c of W.col) if (c.t === 'box' && !c.noStand && x >= c.mn[0] && x <= c.mx[0] && y >= c.mn[1] && y <= c.mx[1] && c.mx[2] <= zMax + .02 && c.mx[2] > h) h = c.mx[2];
   return h; }
 function closest(c, p){
   if (c.t === 'box') return [clamp(p[0], c.mn[0], c.mx[0]), clamp(p[1], c.mn[1], c.mx[1]), clamp(p[2], c.mn[2], c.mx[2])];
@@ -1209,7 +1592,7 @@ function tryArm(){
   S.armed = true; S.iErr = [0,0,0]; audioOn(); flash(S.mode === 'acro' ? 'ARMED: props spinning. Acro mode: nothing levels it for you.' : 'ARMED', 1.6);
 }
 function disarm(){ S.armed = false; }
-function reset(){ const keep = S; S = newState(); S.crashes = keep.crashes; S.best = keep.best; padMem.L[1] = -1; kb.L[1] = -1; syncUI(); }
+function reset(){ const keep = S; S = newState(); S.crashes = keep.crashes; S.best = keep.best; S.hits = keep.hits; padMem.L[1] = -1; kb.L[1] = -1; syncUI(); }
 function crash(why, impact){
   if (S.crashed) return;
   S.crashed = why; S.armed = false; S.crashes++; flash('', 0);
@@ -1223,9 +1606,10 @@ const actual = (x, c, m, e) => { const ax = Math.abs(x), expof = ax*(Math.pow(x,
 const dz = (v, d = .02) => Math.abs(v) < d ? 0 : (v - Math.sign(v)*d)/(1 - d);
 let windT = 0;
 function step(dt){
-  const F = D.fly, m = F.mass, n = CR.n, Tmax = F.twr*m*G/n, rt = rates();
+  const F = D.fly, m = F.mass, n = CR.n, Tmax = F.twr*m*G/n, rt = rates(), heli = F.mix === 'heli';
   S.t += dt; windT += dt;
   if (S.crashed){ stepDebris(dt); return; }
+  if (S.hit) return;                       // the run is over: the charge is spent, nothing moves
   const R = S.R, bz = [R[2], R[5], R[8]], hd = Math.atan2(R[3], R[0]), hf = [Math.cos(hd), Math.sin(hd), 0], hl = [-Math.sin(hd), Math.cos(hd), 0];
   // battery: open-circuit voltage falls with charge, sags with current (internal resistance)
   const soc = clamp(1 - S.used/F.mAh, 0, 1), ocv = 3.45 + .75*soc - (soc < .12 ? (.12 - soc)*4 : 0), Rc = 5.2/F.mAh;
@@ -1248,32 +1632,58 @@ function step(dt){
     if (S.ground && climb <= 0){ Tc = 0; S.landT += dt; if (S.landT > 1 && stick.L[1] < -.6 && S.armed){ disarm(); flash('Landed and disarmed', 1.4); } } else S.landT = 0;
   }
   if (zd){ const e = mtv(R, cr(bz, zd)), ka = D.fly.tau > .1 ? 3.2 : 7; wd[0] = clamp(e[0]*ka, -rt.m*Math.PI/180, rt.m*Math.PI/180); wd[1] = clamp(e[1]*ka, -rt.m*Math.PI/180, rt.m*Math.PI/180); }
-  if (!gpsM){ const thr = (stick.L[1] + 1)/2; Tc = n*Tl*(.035 + .965*Math.pow(thr, 1.6)); }
+  // collective: mid-stick carries the weight, the bottom keeps a little pitch (idle) and the top is full power.
+  // Below the hover point the curve is progressive, so a small pull sinks gently instead of dropping like a stone.
+  if (!gpsM){ if (heli){ const hov = m*G/Math.max(1e-6, Tl), s = stick.L[1], f = s > 0 ? s : s*Math.sqrt(-s);
+      Tc = Tl*clamp(hov + (f > 0 ? 1 - hov : hov - .18)*f, .18, 1); }
+    else { const thr = (stick.L[1] + 1)/2; Tc = n*Tl*(.035 + .965*Math.pow(thr, 1.6)); } }
   // rate loop: torque = inertia x (P x rate error + I x accumulated error); the motors' own lag limits how fast it can be
   const kp = Math.min(60, .42/F.tau), ki = kp*.6;
   const ew = sb(wd, S.w); if (S.armed && !S.ground) S.iErr = S.iErr.map((v, i) => clamp(v + ew[i]*dt, -.5, .5)); else S.iErr = [0,0,0];
   const tq = [0, 1, 2].map(i => CR.I[i]*(kp*ew[i] + ki*S.iErr[i]));
-  // mixer: each motor gets throttle share + roll + pitch + yaw shares
-  const sy2 = CR.pos.reduce((a, p) => a + p[1]*p[1], 0), sx2 = CR.pos.reduce((a, p) => a + p[0]*p[0], 0);
-  let cmd = CR.pos.map(([x, y], i) => Tc/n + tq[0]*y/sy2 - tq[1]*x/sx2 + tq[2]*CR.dirs[i]/(F.kQ*n));
-  // airmode-style clipping: shift the whole set to fit, keeping the differences (attitude) when possible
-  const hi = Math.max(...cmd), lo = Math.min(...cmd);
-  if (hi > Tl) cmd = cmd.map(v => v - (hi - Tl)); if (Math.min(...cmd) < 0 && hi - lo < Tl) cmd = cmd.map(v => v - Math.min(0, lo));
-  const idle = .035*Tl*(gpsM ? 1 : 0);
-  cmd = cmd.map(v => S.armed ? clamp(v, gpsM ? (S.ground && Tc === 0 ? idle : 0) : .035*Tl*.3, Tl) : 0);
+  // mixer: a quad gives each motor throttle + roll + pitch + yaw shares; a helicopter has one collective
+  // command and a swashplate, so its cyclic is solved later from the same rate loop's torque demand
+  let cmd;
+  if (heli){ cmd = [S.armed ? Tc : 0]; }
+  else {
+    const sy2 = CR.pos.reduce((a, p) => a + p[1]*p[1], 0), sx2 = CR.pos.reduce((a, p) => a + p[0]*p[0], 0);
+    cmd = CR.pos.map(([x, y], i) => Tc/n + tq[0]*y/sy2 - tq[1]*x/sx2 + tq[2]*CR.dirs[i]/(F.kQ*n));
+    // airmode-style clipping: shift the whole set to fit, keeping the differences (attitude) when possible
+    const hi = Math.max(...cmd), lo = Math.min(...cmd);
+    if (hi > Tl) cmd = cmd.map(v => v - (hi - Tl)); if (Math.min(...cmd) < 0 && hi - lo < Tl) cmd = cmd.map(v => v - Math.min(0, lo));
+    const idle = .035*Tl*(gpsM ? 1 : 0);
+    cmd = cmd.map(v => S.armed ? clamp(v, gpsM ? (S.ground && Tc === 0 ? idle : 0) : .035*Tl*.3, Tl) : 0);
+  }
   if (soc <= 0) { cmd = cmd.map(() => 0); if (S.armed){ flash('Battery empty: the ESCs shut down', 3); } }
   S.Tc = cmd;
   const a = Math.min(1, dt/F.tau); S.T = S.T.map((t, i) => t + (cmd[i] - t)*a);
   // --- forces and torques ---
   const Tsum = S.T.reduce((x, y) => x + y, 0), w0 = wind(), vrel = sb(S.vel, w0), sp = len(vrel);
-  const Fw = add(sc(bz, Tsum), add([0, 0, -m*G], add(sc(vrel, -F.kd*sp), sc(vrel, -m*.08))));
-  let tau = [0, 0, 0]; CR.pos.forEach(([x, y], i) => { tau[0] += y*S.T[i]; tau[1] -= x*S.T[i]; tau[2] += CR.dirs[i]*F.kQ*S.T[i]; });
+  let Fw, tau;
+  if (heli){
+    // collective + cyclic: the rotor's thrust acts along the disc normal, which the cyclic tilts in the body
+    // frame. The same tilt, acting at the top of the mast, is the torque that rolls and pitches the aircraft.
+    const hub = .62, Tm = Math.max(4, Tsum), lim = 20*Math.PI/180*clamp(.35 + .65*Tsum/Tl, .35, 1);
+    const tiltR = clamp(Math.asin(clamp(tq[0]/(hub*Tm), -1, 1)), -lim, lim), tiltP = clamp(Math.asin(clamp(tq[1]/(hub*Tm), -1, 1)), -lim, lim);
+    const thrust = sc(nz([Math.sin(tiltP), -Math.sin(tiltR), 1]), Tsum);
+    // rotor inflow damps vertical motion far harder than a quad's small props do
+    Fw = add(mv(R, thrust), add([0, 0, -m*G], add(sc(vrel, -F.kd*sp), add(sc(vrel, -m*.08), [0, 0, -m*.25*vrel[2]]))));
+    // the tail rotor: pedal torque plus the main rotor's reaction, which is what a hover trims out
+    const tail = S.armed ? clamp(tq[2]/2.315 + F.kQ*Tsum*.95, -.18*Tmax, .18*Tmax) : 0;
+    S.Tt = tail;
+    tau = [-hub*thrust[1], hub*thrust[0], 2.315*tail - F.kQ*Tsum];
+  } else {
+    Fw = add(sc(bz, Tsum), add([0, 0, -m*G], add(sc(vrel, -F.kd*sp), sc(vrel, -m*.08))));
+    tau = [0, 0, 0]; CR.pos.forEach(([x, y], i) => { tau[0] += y*S.T[i]; tau[1] -= x*S.T[i]; tau[2] += CR.dirs[i]*F.kQ*S.T[i]; });
+  }
   tau = sb(tau, sc(S.w, CR.I[0]*.4));                       // rotor and air damping
   const Iw = S.w.map((v, i) => v*CR.I[i]), gyro = cr(S.w, Iw);
   const alpha = [0, 1, 2].map(i => (tau[i] - gyro[i])/CR.I[i]);
   S.vel = add(S.vel, sc(Fw, dt/m)); S.w = add(S.w, sc(alpha, dt));
   const prev = S.pos.slice(); S.pos = add(S.pos, sc(S.vel, dt)); S.R = orthon(mm(S.R, expW(S.w, dt)));
   S.amps = .4 + F.Imax*Math.pow(Tsum/(n*Tmax), 1.3); if (S.armed) { S.used += S.amps*dt/3.6; S.flightT += dt; }
+  // the run clock: it runs while the drone is in the air, so the score is the flying time to the target
+  if (S.armed && !S.ground && !S.hit){ if (S.takeoffT == null) S.takeoffT = S.t; S.runT += dt; }
   S.spin = S.spin.map((v, i) => v + Math.sqrt(Math.max(0, S.T[i])/Tmax)*dt*60);
   collide(dt, prev);
   gates(prev);
@@ -1298,6 +1708,15 @@ function collide(dt, prev){
     if (c.t === 'box' && p[2] - CR.foot >= c.mx[2] - .03) continue;          // standing on it: handled as a surface
     const q = closest(c, p), d = sb(p, q), dist = len(d);
     if (dist >= CR.rad) continue;
+    // the target board: a hit on the bullseye is a strike, a hit on the outer ring is a miss.
+    // It ends the run: the charge is spent, so the drone stops and the clock is final.
+    if (c.tgt && !S.hit){ const T = W.target, off = Math.hypot(q[1] - T.y, q[2] - T.z);
+      const bull = off <= T.bull;
+      S.hit = { t: S.runT, bull, off };
+      if (bull){ S.hits++; recordHit(S.runT, true); flash('BULLSEYE! ' + S.runT.toFixed(2) + ' s', 5); }
+      else flash('Hit the target, but not the bullseye (' + S.runT.toFixed(2) + ' s)', 5);
+      S.vel = [0, 0, 0]; S.w = [0, 0, 0]; S.armed = false; S.T = S.T.map(() => 0);
+      return; }
     // inside the collider already (fast or thin): push back out the side it came in through
     const qp = closest(c, prev), dp2 = sb(prev, qp), nrm = dist > 1e-6 ? sc(d, 1/dist) : len(dp2) > 1e-6 ? nz(dp2) : [0, 0, 1], vn = -dt3(S.vel, nrm);
     if (vn > F.crashV*(F.ducts ? 1 : .75)) return crash(`Hit ${colName(c)} at ${vn.toFixed(1)} m/s`, vn);
@@ -1333,7 +1752,7 @@ function updateCam(dt){
   cam.near = Math.max(.01, sz*.05);
   if (v === 'fpv' && !S.crashed){
     const up = rt.up*Math.PI/180;
-    if (D.fly.cam === 'gimbal'){ const hd = Math.atan2(R[3], R[0]), f = [Math.cos(hd)*Math.cos(up), Math.sin(hd)*Math.cos(up), Math.sin(up)]; setCam(p, f, [0, 0, 1], rt.fov); }
+    if (D.fly.cam === 'gimbal'){ const hd = Math.atan2(R[3], R[0]), f = [Math.cos(hd)*Math.cos(up), Math.sin(hd)*Math.cos(up), Math.sin(up)], cp = CR.camOff ? add(p, mv(R, CR.camOff)) : p; setCam(cp, f, [0, 0, 1], rt.fov); }
     else { const fb = mv(R, [Math.cos(up), 0, Math.sin(up)]), ub = mv(R, [-Math.sin(up), 0, Math.cos(up)]); setCam(add(p, mv(R, [CR.rad*.3, 0, .01])), fb, ub, rt.fov); }
   } else if (v === 'los'){ setCam(W.pilot, sb(p, W.pilot), [0, 0, 1], 52); }
   else {
@@ -1433,12 +1852,21 @@ function drawCraft(){
   const Tmax = D.fly.twr*D.fly.mass*G/CR.n;
   for (const it of items){
     if (it.p){ drawObj(it.p.o, xf, { inkK: .8 }); continue; }
-    const pr = it.prop, sp = Math.sqrt(Math.max(0, S.T[it.i])/Tmax);
+    const pr = it.prop, ch = pr.ch == null ? it.i : pr.ch, sp = Math.sqrt(Math.max(0, S.T[ch])/Tmax);
+    const nb = pr.blades || D.geo.blades, a = S.spin[ch]*(pr.spinK || 1)*-pr.dir, wb = pr.r*.09;
+    if (pr.plane === 'xz'){   // a tail rotor: disc and blades in a vertical plane, turning about the y axis
+      const disc = Array.from({ length: 16 }, (_, i) => { const t = i/16*2*Math.PI; return xf.p([pr.x + Math.cos(t)*pr.r, pr.y, pr.z + Math.sin(t)*pr.r]); });
+      poly(disc, pr.col, 0, S.armed || sp > .02 ? .22 + .2*sp : 0);
+      for (let b = 0; b < nb; b++){ const t = a + b*2*Math.PI/nb, c = Math.cos(t), s = Math.sin(t);
+        const bl = [[pr.x + c*pr.r*.1 - s*wb, pr.z + s*pr.r*.1 + c*wb], [pr.x + c*pr.r - s*wb*.5, pr.z + s*pr.r + c*wb*.5],
+                    [pr.x + c*pr.r + s*wb*.5, pr.z + s*pr.r - c*wb*.5], [pr.x + c*pr.r*.1 + s*wb, pr.z + s*pr.r*.1 - c*wb]].map(([x, z]) => xf.p([x, pr.y + .001, z]));
+        poly(bl, pr.col, .8, S.armed ? .45 : 1); }
+      continue;
+    }
     const disc = circP(pr.x, pr.y, pr.r, 16).map(([x, y]) => xf.p([x, y, pr.z]));
     poly(disc, pr.col, 0, S.armed || sp > .02 ? .22 + .2*sp : 0);
     // the blades: blurred when spinning, a bar when still
-    const a = S.spin[it.i]*-pr.dir, nb = D.geo.blades;
-    for (let b = 0; b < nb; b++){ const t = a + b*2*Math.PI/nb, c = Math.cos(t), s = Math.sin(t), wb = pr.r*.09;
+    for (let b = 0; b < nb; b++){ const t = a + b*2*Math.PI/nb, c = Math.cos(t), s = Math.sin(t);
       const bl = [[pr.x + c*pr.r*.1 - s*wb, pr.y + s*pr.r*.1 + c*wb], [pr.x + c*pr.r - s*wb*.5, pr.y + s*pr.r + c*wb*.5], [pr.x + c*pr.r + s*wb*.5, pr.y + s*pr.r - c*wb*.5], [pr.x + c*pr.r*.1 + s*wb, pr.y + s*pr.r*.1 - c*wb]].map(([x, y]) => xf.p([x, y, pr.z + .001]));
       poly(bl, pr.col, .8, S.armed ? .45 : 1); }
   }
@@ -1449,6 +1877,14 @@ function txt(s, x, y, size = 13, col = INK, align = 'left', bold = 700){ cx.font
 function osd(s, x, y, size = 14, align = 'left', col = '#ffffff'){ cx.font = `800 ${size*DPR}px ui-monospace,Menlo,monospace`; cx.textAlign = align; cx.lineWidth = 3*DPR; cx.strokeStyle = '#000000'; cx.strokeText(s, x*DPR, y*DPR); cx.fillStyle = col; cx.fillText(s, x*DPR, y*DPR); cx.strokeStyle = INK; }
 function panel(x, y, w, h){ cx.beginPath(); cx.roundRect((x + 3)*DPR, (y + 3)*DPR, w*DPR, h*DPR, 10*DPR); cx.fillStyle = INK; cx.fill();
   cx.beginPath(); cx.roundRect(x*DPR, y*DPR, w*DPR, h*DPR, 10*DPR); cx.fillStyle = '#fbf7ea'; cx.fill(); cx.lineWidth = 1.6*DPR; cx.strokeStyle = INK; cx.stroke(); }
+// a paper-and-ink level bar; centre = 1 fills out from the middle (a pedal readout)
+function bar(x, y, w, h, v, centre){
+  cx.lineWidth = 1.4*DPR; cx.strokeStyle = INK; cx.strokeRect(x*DPR, y*DPR, w*DPR, h*DPR);
+  const f = centre ? clamp(v, -1, 1) : clamp(v, 0, 1), a = centre ? .5 : 0, b = centre ? .5 + f*.5 : f;
+  if (Math.abs(b - a) > .002){ cx.fillStyle = centre && f < 0 ? '#3f78d8' : '#f4b829';
+    cx.fillRect((x + w*Math.min(a, b) + 1)*DPR, (y + 1)*DPR, (w*Math.abs(b - a) - 1)*DPR, (h - 2)*DPR); }
+  if (centre){ cx.beginPath(); cx.moveTo((x + w*.5)*DPR, (y - 2)*DPR); cx.lineTo((x + w*.5)*DPR, (y + h + 2)*DPR); cx.lineWidth = 1.2*DPR; cx.strokeStyle = '#857d6e'; cx.stroke(); cx.strokeStyle = INK; }
+}
 function padRect(side){ const s = Math.min(150, VW*.28, VH*.24), m = 14, y = VH - s - m; return side === 'L' ? [m, y, s] : [VW - s - m, y, s]; }
 let barBottom = 54;
 function drawHUD(){
@@ -1495,9 +1931,56 @@ function drawHUD(){
     if (q[2] > cam.near){ const s = scr(q); if (s[0] > 0 && s[0] < cv.width && s[1] > 0 && s[1] < cv.height){ cx.beginPath(); cx.moveTo(s[0], s[1]); cx.lineTo(s[0] - 9*DPR, s[1] - 14*DPR); cx.lineTo(s[0] + 9*DPR, s[1] - 14*DPR); cx.closePath(); cx.fillStyle = '#f4b829'; cx.fill(); cx.lineWidth = 1.6*DPR; cx.stroke(); } }
     else txt('NEXT GATE IS BEHIND YOU (yellow)', VW/2, VH*.72, 12, INK, 'center');
   }
-  // the live mixer: each motor's output, placed like the real motors, ring colour = spin direction
+  // target range: the run clock, the distance to the target and the best time
+  if (W.target){
+    const T = W.target, y = fpv ? top + 52 : top + 20, x = VW - 16;
+    const best = lbBest();
+    const line = `TARGET ${S.runT.toFixed(1)}s   BEST ${best != null ? best.toFixed(2) + 's' : '-'}`;
+    if (fpv) osd(line, x, y, 13, 'right'); else { panel(VW - 330, top, 320, 26); txt(line, VW - 20, top + 18, 12, INK, 'right'); }
+    // distance and bearing to the target
+    const dx = T.x - S.pos[0], dy = T.y - S.pos[1], dz = T.z - S.pos[2], dist = Math.hypot(dx, dy, dz);
+    const hdg = Math.atan2(dy, dx) - Math.atan2(S.R[3], S.R[0]);
+    const hdgTxt = Math.round((hdg * 180/Math.PI + 540) % 360 - 180);
+    txt(`${dist.toFixed(0)} m   ${hdgTxt > 0 ? 'RIGHT' : hdgTxt < 0 ? 'LEFT' : 'AHEAD'} ${Math.abs(hdgTxt)}°`, x - 0, (fpv ? top + 72 : top + 40), 12, INK, 'right');
+    // a marker over the bullseye
+    const q = toC([T.x, T.y, T.z]);
+    if (q[2] > cam.near){ const s = scr(q);
+      if (s[0] > 0 && s[0] < cv.width && s[1] > 0 && s[1] < cv.height){
+        cx.beginPath(); cx.arc(s[0], s[1], 16*DPR, 0, 2*Math.PI); cx.strokeStyle = '#e2483d'; cx.lineWidth = 2*DPR; cx.stroke();
+        cx.beginPath(); cx.arc(s[0], s[1], 3*DPR, 0, 2*Math.PI); cx.fillStyle = '#e2483d'; cx.fill(); }
+      else { const ang = Math.atan2(-s[1], s[0]), ex = VW/2 + Math.cos(ang)*Math.min(VW, VH)*.35, ey = VH/2 + Math.sin(ang)*Math.min(VW, VH)*.35;
+        cx.save(); cx.translate(ex*DPR, ey*DPR); cx.rotate(ang);
+        cx.beginPath(); cx.moveTo(12*DPR, 0); cx.lineTo(-8*DPR, 8*DPR); cx.lineTo(-8*DPR, -8*DPR); cx.closePath();
+        cx.fillStyle = '#e2483d'; cx.fill(); cx.lineWidth = 1.6*DPR; cx.stroke(); cx.restore(); } }
+    // the last strike result
+    if (S.hit){ const h = S.hit;
+      const by = fpv ? top + 96 : VH*.28, bw = Math.min(420, VW - 40);
+      panel(VW/2 - bw/2, by, bw, 72);
+      cx.fillStyle = h.bull ? '#ffe9b0' : '#fbe0d6'; cx.beginPath(); cx.roundRect((VW/2 - bw/2 + 1.5)*DPR, (by + 1.5)*DPR, (bw - 3)*DPR, 69*DPR, 9*DPR); cx.fill();
+      txt(h.bull ? 'BULLSEYE' : 'TARGET HIT', VW/2, by + 22, 16, INK, 'center', 800);
+      txt(h.t.toFixed(2) + ' s', VW/2, by + 43, 14, INK, 'center', 800);
+      txt(lbRank(h.t) ? '#' + lbRank(h.t) + ' on the board' : 'first entry', VW/2, by + 60, 12, INK, 'center');
+      txt('Press R to fly it again', VW/2, by + 78, 11, '#857d6e', 'center'); }
+  }
+  // the live mixer: a quad shows each motor; a helicopter shows its two controls instead
   const Tmax = F.twr*F.mass*G/CR.n, mw = Math.min(190, VW - 2*padRect('L')[2] - 52), mh = mw*.72, mx0 = VW/2 - mw/2, my0 = VH - mh - 16;
   if (mw > 90){ panel(mx0, my0, mw, mh);
+  if (F.mix === 'heli'){
+    // one mast, one tail rotor: collective is the blade bite, the pedal is the tail rotor's share
+    const coll = clamp(S.T[0]/Math.max(1e-6, Tmax), 0, 1), tail = clamp((S.Tt || 0)/(.18*Tmax), -1, 1);
+    const x0 = mx0 + 12, bw = mw - 24, hb = Math.max(8, Math.min(14, mh*.13));
+    txt('COLLECTIVE', x0, my0 + mh*.20, 10.5, '#857d6e', 'left', 800);
+    txt(Math.round(coll*100) + '%', x0 + bw, my0 + mh*.20, 11, INK, 'right', 800);
+    bar(x0, my0 + mh*.25, bw, hb, coll, 0);
+    // the hover mark: the collective that just carries the aircraft's weight
+    const hx = x0 + bw/F.twr;
+    cx.beginPath(); cx.moveTo(hx*DPR, (my0 + mh*.25 - 4)*DPR); cx.lineTo(hx*DPR, (my0 + mh*.25 + hb + 2)*DPR); cx.lineWidth = 2*DPR; cx.strokeStyle = '#e2483d'; cx.stroke(); cx.strokeStyle = INK;
+    txt('HOVER', hx, my0 + mh*.25 + hb + mh*.09, 8.5, '#c4362b', 'center', 800);
+    txt('TAIL ROTOR', x0, my0 + mh*.62, 10.5, '#857d6e', 'left', 800);
+    txt((tail >= 0 ? '+' : '') + Math.round(tail*100) + '%', x0 + bw, my0 + mh*.62, 11, INK, 'right', 800);
+    bar(x0, my0 + mh*.67, bw, hb, tail, 1);
+    txt('PEDAL', x0 + bw/2, my0 + mh*.67 + hb + mh*.09, 8.5, '#857d6e', 'center', 800);
+  } else {
   txt('MOTOR MIX', mx0 + 10, my0 + 16, 10.5, '#857d6e', 'left', 800);
   const ext = Math.max(...CR.pos.map(([x, y]) => Math.max(Math.abs(x), Math.abs(y)))), mr = Math.min(15, mh*.12), sk = (mh/2 - mr - 14)/ext, ccx = mx0 + mw/2, ccy = my0 + mh/2 + 9;
   cx.beginPath(); CR.pos.forEach(([x, y]) => { cx.moveTo(ccx*DPR, ccy*DPR); cx.lineTo((ccx - y*sk)*DPR, (ccy - x*sk)*DPR); }); cx.lineWidth = 3*DPR; cx.strokeStyle = '#857d6e'; cx.stroke(); cx.strokeStyle = INK;
@@ -1506,7 +1989,7 @@ function drawHUD(){
     cx.beginPath(); cx.moveTo(px*DPR, py*DPR); cx.arc(px*DPR, py*DPR, mr*DPR, -Math.PI/2, -Math.PI/2 + v*2*Math.PI); cx.closePath(); cx.fillStyle = '#f4b829'; cx.fill();
     cx.beginPath(); cx.arc(px*DPR, py*DPR, mr*DPR, 0, 2*Math.PI); cx.lineWidth = 2.6*DPR; cx.strokeStyle = CR.dirs[i] > 0 ? '#e2483d' : '#3f78d8'; cx.stroke();
     if (mr > 9) txt(Math.round(v*100) + '', px, py + 4, 9.5, INK, 'center', 800); });
-  cx.strokeStyle = INK; txt('NOSE UP', mx0 + mw - 10, my0 + 16, 9.5, '#857d6e', 'right', 800); }
+  cx.strokeStyle = INK; txt('NOSE UP', mx0 + mw - 10, my0 + 16, 9.5, '#857d6e', 'right', 800); } }
   // sticks
   for (const side of ['L', 'R']){ const [x, y, s] = padRect(side), v = SET.stickMode == 1 ? (side === 'L' ? [stick.L[0], stick.R[1]] : [stick.R[0], stick.L[1]]) : stick[side];
     cx.globalAlpha = .9; panel(x, y, s, s); cx.globalAlpha = 1;
@@ -1519,7 +2002,8 @@ function drawHUD(){
     if (side === thrSide) txt(Math.round((stick.L[1] + 1)*50) + '%', x + s - 6, y + 14, 10, '#857d6e', 'right', 800); }
   // messages
   let msg = S.msgT > 0 ? S.msg : '';
-  if (S.crashed) msg = 'CRASH: ' + S.crashed + '. Press R or Reset for a fresh drone.';
+  if (S.hit) msg = '';                          // the strike panel says it better
+  else if (S.crashed) msg = 'CRASH: ' + S.crashed + '. Press R or Reset for a fresh drone.';
   else if (!S.armed && !msg) msg = (S.mode === 'acro' || S.mode === 'angle') ? 'Disarmed. Throttle all the way down, then press Enter (or your arm switch) to arm.' : 'Disarmed. Press Enter (or your arm switch) to start the motors, then push the throttle up to climb.';
   else if (S.armed && S.cellV < 3.5 && Math.floor(S.t*2) % 2) msg = 'LOW BATTERY: land now';
   if (S.paused) msg = 'Paused (P)';
@@ -1566,10 +2050,24 @@ $('bView').onclick = e => { cycleView(); e.target.blur(); };
 $('bMode').onclick = e => { cycleMode(); e.target.blur(); };
 $('bArm').onclick = e => { S.armed ? disarm() : tryArm(); e.target.blur(); syncUI(); };
 $('bReset').onclick = e => { reset(); e.target.blur(); };
-for (const [b, c] of [['bHelp', 'help'], ['bSet', 'set'], ['bHow', 'how']]) $(b).onclick = e => { for (const k of ['help', 'set', 'how']) $(k).hidden = k !== c || !$(k).hidden; e.target.blur(); if (c === 'set') fillSettings(); };
+for (const [b, c] of [['bHelp', 'help'], ['bSet', 'set'], ['bHow', 'how'], ['bBoard', 'board']]) $(b).onclick = e => { for (const k of ['help', 'set', 'how', 'board']) $(k).hidden = k !== c || !$(k).hidden; e.target.blur(); if (c === 'set') fillSettings(); if (c === 'board') fillBoard(); };
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => b.closest('.card').hidden = true);
+function fillBoard(){
+  const l = lbAll(), el = $('boardList');
+  if (!l.length) el.innerHTML = '<p class="empty">No strikes yet. Pick the <b>Target range</b> environment, fly to the bullseye and hit it.</p>';
+  else el.innerHTML = '<table class="lb"><thead><tr><th>#</th><th>Drone</th><th>Time</th></tr></thead><tbody>'
+    + l.map((e, i) => `<tr${e.drone === D.id ? ' class="mine"' : ''}><td>${i + 1}</td><td>${e.name}</td><td class="t">${e.t.toFixed(2)} s</td></tr>`).join('')
+    + '</tbody></table>';
+  const mine = lbFor();
+  $('boardMine').textContent = mine.length
+    ? `Fastest with the ${D.name}: ${mine[0].t.toFixed(2)} s. That is ${lbRank(mine[0].t)} of ${lbAll().length} on the board.`
+    : `No bullseye yet with the ${D.name}.`;
+}
+$('bBoardClear').onclick = () => { store.set(LB_KEY, []); fillBoard(); };
 function syncUI(){ selD.value = D.id; selE.value = SET.env; $('bView').textContent = 'View: ' + views.find(v => v[0] === SET.view)[1]; $('bMode').textContent = 'Mode: ' + modeNames[S.mode];
-  $('bArm').textContent = S.armed ? 'Disarm' : 'Arm'; $('bArm').setAttribute('aria-pressed', S.armed); }
+  $('bArm').textContent = S.armed ? 'Disarm' : 'Arm'; $('bArm').setAttribute('aria-pressed', S.armed);
+  // the help card explains the machine you are flying: four motors, or one rotor and a tail rotor
+  const heli = D.fly.mix === 'heli'; $('howQuad').hidden = heli; $('howHeli').hidden = !heli; }
 function fillSettings(){
   const rt = rates(), bind = (id, oid, key, fmt) => { const el = $(id), o = $(oid); el.value = rt[key]; o.textContent = fmt(rt[key]);
     el.oninput = () => { const r = SET.rates[D.id] = SET.rates[D.id] || {}; r[key] = +el.value; o.textContent = fmt(+el.value); saveSet(); }; };
@@ -1601,7 +2099,7 @@ addEventListener('keydown', e => {
   keys.add(k);
   if (k === 'enter' || k === ' '){ S.armed ? disarm() : tryArm(); syncUI(); }
   else if (k === 'r') reset(); else if (k === 'v' || k === 'c') cycleView(); else if (k === 'm') cycleMode(); else if (k === 'p') S.paused = !S.paused;
-  else if (k === 'escape') for (const c of ['help', 'set', 'how']) $(c).hidden = true;
+  else if (k === 'escape') for (const c of ['help', 'set', 'how', 'board']) $(c).hidden = true;
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => keys.clear());
@@ -1632,5 +2130,7 @@ function sched(){ pending = true; requestAnimationFrame(run); fbT = setTimeout(r
 function run(){ if (!pending) return; pending = false; clearTimeout(fbT); frame(performance.now()); sched(); }
 sched();
 window.__S = () => S;
+// test hooks: the physics and the sticks, so a scripted run can drive the sim without touching the UI
+window.__sim = { step, stick, kb, padMem, state: () => S, craft: () => CR, drone: () => D };
 })();
 </script></body></html>

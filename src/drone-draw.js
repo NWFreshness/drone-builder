@@ -59,12 +59,24 @@ function ddDome(x, y, z0, r, h, m){
   let s = ''; for (let i = 0; i < rings.length - 1; i++) s += loft(rings[i], rings[i+1], nr => tone(nr, m));
   return { svg: s + hullInk(rings.flat(), 1.6), pts: rings.flat() };
 }
+// a ball: two domes back to back (the sensor turret under a nose)
+const ddBall = (x, y, z, r, m) => { const u = ddDome(x, y, z, r, r, m), d = ddDome(x, y, z, r, -r, m);
+  return { svg: u.svg + d.svg, pts: [...u.pts, ...d.pts] }; };
+// a slab between two copies of an [x, z] outline, extruded from y0 to y1 (fins, gear plates, flat brackets)
+function ddSlab(poly, y0, y1, m, w = .9){
+  const A = poly.map(([x, z]) => [x, y0, z]), B = poly.map(([x, z]) => [x, y1, z]), faces = [A, B];
+  for (let i = 0; i < poly.length; i++){ const j = (i + 1) % poly.length;
+    faces.push([[poly[i][0], y0, poly[i][1]], [poly[j][0], y0, poly[j][1]], [poly[j][0], y1, poly[j][1]], [poly[i][0], y1, poly[i][1]]]); }
+  return ddSolid(faces, m, w, 1.2);
+}
 // a wire: an inked coloured line through local points
 function ddWire(pts, col, w = .9){
   const W = pts.map(ddXF), d = pd(W, false);
   return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w*2 + .9)}" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w*2)}" stroke-linejoin="round" stroke-linecap="round"/>`, pts: W };
 }
 const dd2Rect = (x0, y0, x1, y1, r = 0) => r > 0 ? rrUV(x0, y0, x1, y1, r, 4) : rectUV(x0, y0, x1, y1);
+// an octagonal section: a box with its corners cut, which is what makes a moulded shell read as faceted
+const dd2Oct = (h, z0, z1, c) => [[-h + c, z0], [h - c, z0], [h, z0 + c], [h, z1 - c], [h - c, z1], [-h + c, z1], [-h, z1 - c], [-h, z0 + c]];
 // a rectangle of length len, width w, centred at (cx, cy), turned to angle a (deg)
 const dd2Rot = (cx, cy, a, len, w) => { const c = Math.cos(a*Math.PI/180), s = Math.sin(a*Math.PI/180);
   return [[-len/2, -w/2], [len/2, -w/2], [len/2, w/2], [-len/2, w/2]].map(([u, v]) => [cx + u*c - v*s, cy + u*s + v*c]); };
@@ -73,7 +85,7 @@ const dd2Arm = (a, r0, r1, w, pad) => { const c = Math.cos(a*Math.PI/180), s = M
   return hull([[r0*c + w/2*s, r0*s - w/2*c], [r0*c - w/2*s, r0*s + w/2*c], ...ellUV(mx, my, pad, pad, 16)]); };
 
 /* ---------- propeller, spin arrow, thrust arrow ---------- */
-function ddProp(mx, my, zP, R, blades, dir, col, ang, speed){
+function ddProp(mx, my, zP, R, blades, dir, col, ang, speed, chord = 1){
   const M = matOf(col), hubR = Math.max(R*.09, 2.2);
   let s = '';
   const pts = [];
@@ -83,7 +95,7 @@ function ddProp(mx, my, zP, R, blades, dir, col, ang, speed){
     s += fill(pd(ring), col, `opacity="${f(.28*blur)}"`) + `<path d="${pd(ring)}" fill="none" stroke="${INK}" stroke-width=".6" opacity="${f(.5*blur)}" stroke-dasharray="3 3"/>`; }
   for (let b = 0; b < blades; b++){
     const th = ang*Math.PI/180*-dir + b*2*Math.PI/blades, r0 = hubR*.8;
-    const wr = R*.17, wt = R*.08, lead = -dir;   // leading edge moves the way the prop turns, and sits higher (pitch)
+    const wr = R*.17*chord, wt = R*.08*chord, lead = -dir;   // leading edge moves the way the prop turns, and sits higher (pitch)
     const P2 = (r, w, z) => { const a = th + lead*w/r; return [mx + r*Math.cos(a), my + r*Math.sin(a), z]; };
     const q = [P2(r0, wr*.5, zP + 2.4), P2(R*.55, wr, zP + 2.2), P2(R, wt, zP + 1.6), P2(R, -wt*.6, zP + .9), P2(R*.55, -wr*.6, zP + .6), P2(r0, -wr*.4, zP + .5)].map(ddXF);
     let n = ddNormal(q); if (!vis(n)) n = n.map(v => -v);
@@ -119,16 +131,17 @@ function ddModel(D, opt){
     DD_DZ = from.map(c => c*k2*opt.drop); return !!cur; };
   const add = (key, sol, flags = {}) => { if (!cur) return; const box3 = ddBB(sol.pts);
     let svg = sol.svg; if (cur.v < 1) svg = `<g opacity="${f(Math.min(1, cur.v*2))}">${svg}</g>`;
-    const nm = DL_PARTS[key] || [key.toUpperCase(), ''];
+    const nm = (D.partText && D.partText[key]) || DL_PARTS[key] || [key.toUpperCase(), ''];
     svg = `<g data-act="part" data-k="${key}" class="pt${opt.sel === key ? ' selp' : ''}"><title>${nm[0]}: ${nm[1]}</title>${svg}</g>`;
     items.push({ box: box3, svg, key, step: cur.i, cover: !!flags.cover, inner: !!flags.inner });
     if (!labels[key] && cur.v >= 1) labels[key] = flags.at ? ddXF(flags.at) : boxMid(box3); };
   const motors = g.motors.map((m, i) => ({ ...m, ...(g.pos ? { x: g.pos[i][0], y: g.pos[i][1] } : { x: g.arm*Math.cos(m.a*Math.PI/180), y: g.arm*Math.sin(m.a*Math.PI/180) }) }));
-  const st = { motors, zP: 0, zMotor: 0, top: 0 };
-  const B = { xplate: ddXPlate, duct: ddDuct, shell: ddShell, round: ddRound }[g.style];
+  // spin / speed / arrows are handed to the style too: a helicopter draws its tail rotor, so it needs the same phase
+  const st = { motors, zP: 0, zMotor: 0, top: 0, spin: opt.spin || 0, speed: (opt.speeds && opt.speeds[0]) || 0, arrows: !!opt.arrows };
+  const B = { xplate: ddXPlate, duct: ddDuct, shell: ddShell, round: ddRound, strike: ddStrike, bolt: ddBolt, heli: ddHeli }[g.style];
   B(D, g, st, step, add, shadow);
   // motors, props, arrows and thrust are the same on every drone (each style sets st.zMotor, st.zP and motor sizes)
-  const mm = matOf(D.geo.motorCol || '#c9cfd2'), bell = PALS[D.pal] ? PALS[D.pal] : DD_SILVER;
+  const mm = matOf(D.geo.motorCol || '#c9cfd2'), bell = g.bellCol ? matOf(g.bellCol) : PALS[D.pal] ? PALS[D.pal] : DD_SILVER;
   if (step('motors')) motors.forEach((m, i) => {
     const z0 = m.z0 != null ? m.z0 : st.zMotor, R = g.motorR, h = g.motorH || R*1.2;
     const base = ddCyl(m.x, m.y, z0, z0 + R*.22, R*.86, DD_CHIP, .8, 16), bel = ddCyl(m.x, m.y, z0 + R*.22, z0 + R*.22 + h, R, bell, 1, 18);
@@ -138,14 +151,17 @@ function ddModel(D, opt){
   });
   if (opt.arrows && opt.show(DD_STEP_I.motors) >= 1) motors.forEach(m => {
     const zP = m.zP != null ? m.zP : st.zP; DD_DZ = [0, 0, 0];
-    const a = ddSpinArrow(m.x, m.y, zP + g.propR*.14 + 4, g.propR, m.dir);
+    // a rotor with a huge disc draws its arrow close in: a full-size arc reads as a stray cable, not a spin cue
+    const aR = m.arrowR || g.propR;
+    const a = ddSpinArrow(m.x, m.y, zP + aR*.14 + 4, aR, m.dir);
     items.push({ box: ddBB(a.pts), svg: `<g class="spin">${a.svg}</g>`, key: 'arrow', step: -1 }); });
   if (step('props')) motors.forEach((m, i) => {
+    if (m.noProp) return;   // a style that draws its own blades (a helicopter's rotor) opts out here
     const zP = m.zP != null ? m.zP : st.zP, sp = (opt.speeds && opt.speeds[i]) || 0;
     add('prop', ddProp(m.x, m.y, zP, g.propR, g.blades, m.dir, g.propCol, (opt.spin || 0)*(.6 + .4*sp) + i*37, sp), { at: [m.x + g.propR*.7, m.y, zP + 2] });
   });
   if (opt.thrust) motors.forEach((m, i) => { DD_DZ = [0, 0, 0];
-    const zP = m.zP != null ? m.zP : st.zP, t = ddThrust(m.x, m.y, zP + 5, g.propR, opt.thrust[i]);
+    const zP = m.zP != null ? m.zP : st.zP, tR = m.thrustR || g.propR, t = ddThrust(m.x, m.y, zP + 5, tR, opt.thrust[i]);
     items.push({ box: ddBB(t.pts), svg: t.svg, key: 'thrust', step: -1 }); });
   DD_DZ = [0, 0, 0];
   return { items, labels, shadow, top: st.top, motors, zP: st.zP };
@@ -354,6 +370,95 @@ function ddShell(D, g, st, step, add, shadow){
   st.top = 60;
 }
 
+/* ---------- style: strike quad (tall legs, payload pod slung under the belly) ---------- */
+const ddStrikeLayout = g => DL_STRIKE(g);
+function ddStrike(D, g, st, step, add, shadow){
+  const L = g.plateL, W = g.plateW, pal = PALS[D.pal], R = g.motorR;
+  const { zB, zA, zA1, zC, zE, zF, T0, s2, bw, pod: P } = ddStrikeLayout(g);
+  st.zMotor = zA1; st.zP = zA1 + R*.22 + g.motorH + 1.2; st.top = T0 + g.batt[2];
+  const corners = [[L/2 - 14, W/2 - 9], [L/2 - 14, -W/2 + 9], [-L/2 + 14, W/2 - 9], [-L/2 + 14, -W/2 + 9]];
+  if (step('frame')){
+    add('plate', ddPrism(dd2Rect(-L/2, -W/2, L/2, W/2, 10), zB, zA, DD_CARBON, .9, 1.4), { at: [-L/2 + 8, W/2 - 6, zA] });
+    // long splayed legs: the payload pod needs clear air under the belly
+    for (const [x, y] of corners){
+      add('gear', ddRod([x, y, zB], [x*1.1, y*1.22, 3], 4.5, DD_CARBON, 1), { at: [x*1.05, y*1.11, zB*.5] });
+      add('foot', ddCyl(x*1.1, y*1.22, 0, 3, 7, DD_RUBBER, .8, 10));
+      shadow.push(ddXF([x*1.1, y*1.22, 0]));
+    }
+    for (const y of [-13, 12]) add('plate', ddBox(L/2 - 24, y, zC, L/2 + 1, y + 1.5, T0, DD_CARBON, .8, 1));
+  }
+  if (step('arms')){
+    g.motors.forEach(m => add('arm', ddPrism(dd2Arm(m.a, 18, g.arm, g.armW, R*.95), zA, zA1, DD_CARBON, .9, 1.3),
+      { at: [g.arm*.6*Math.cos(m.a*Math.PI/180), g.arm*.6*Math.sin(m.a*Math.PI/180), zA1] }));
+    add('plate', ddPrism(dd2Rect(-L/2 + 4, -W/2 + 2, L/2 - 22, W/2 - 2, 6), zA1, zC, DD_CARBON, .8, 1.1));
+    for (const m of g.motors) shadow.push(ddXF([g.arm*Math.cos(m.a*Math.PI/180), g.arm*Math.sin(m.a*Math.PI/180), zA1]));
+  }
+  if (step('esc')){
+    for (const sx of [-s2, s2]) for (const sy of [-s2, s2]) add('standoff', ddCyl(sx - 4, sy, zC, zF + 2, 1.6, DD_GREY, .6, 8));
+    const esc = ddBox(-bw - 4, -bw, zE, bw - 4, bw, zE + 1.6, DD_PCB_E, .8, 1);
+    let svg = esc.svg; for (let i = 0; i < 4; i++) for (const sy of [-9, 5]) svg += ddBox(-14 - 4 + i*7, sy, zE + 1.6, -10 - 4 + i*7, sy + 4, zE + 3, DD_CHIP, .5, .6).svg;
+    add('esc', { svg, pts: esc.pts }, { inner: true, at: [bw - 4, bw, zE + 1] });
+  }
+  if (step('fc')){
+    const fc = ddBox(-bw - 4, -bw, zF, bw - 4, bw, zF + 1.6, DD_PCB_F, .8, 1);
+    const mcu = ddBox(-9, -6, zF + 1.6, 3, 6, zF + 3, DD_CHIP, .5, .6), usb = ddBox(-8, bw - 1, zF + 1.6, 0, bw + 1.5, zF + 4.6, DD_SILVER, .5, .6);
+    add('fc', { svg: fc.svg + mcu.svg + usb.svg, pts: fc.pts }, { inner: true, at: [-bw - 4, -bw, zF + 1] });
+    add('gyro', ddBox(6, -bw + 4, zF + 1.6, 10, -bw + 8, zF + 2.8, matOf('#d8d8d8'), .5, .6), { inner: true });
+  }
+  const zV = zF + 3.6, rear = -L/2;
+  if (step('camera')){
+    const cam = ddBox(L/2 - 21, -9.5, zC + 5, L/2 - 2, 9.5, zC + 24, DD_CHIP, .8, 1.1);
+    const tilt = (D.fly.uptilt || 0)*Math.PI/180, lc = [L/2 - 2, 0, zC + 14.5];
+    const lens = ddRod(lc, [lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], 7, DD_CHIP, .9, 6.4);
+    const glass = ddRod([lc[0] + 9*Math.cos(tilt), 0, lc[2] + 9*Math.sin(tilt)], [lc[0] + 9.6*Math.cos(tilt), 0, lc[2] + 9.6*Math.sin(tilt)], 4.6, matOf('#4b6b9a'), .6);
+    add('camera', { svg: cam.svg + lens.svg + glass.svg, pts: [...cam.pts, ...lens.pts] });
+    add('vtx', ddBox(-14 - 4, -13, zV, 14 - 4, 13, zV + 4, matOf('#3a3f45'), .8, 1), { inner: true });
+    add('rx', ddBox(rear + 6, -5, zC, rear + 18, 5, zC + 2, DD_PCB_E, .6, .8), { inner: true });
+    for (const s of [-1, 1]) add('antenna', ddRod([rear + 6, 3*s, zC + 1], [rear - 22, 16*s, zC + 10], 1, DD_WHITE, .7), { at: [rear - 20, 15*s, zC + 9] });
+    add('antenna', ddRod([rear - 2, 0, zV + 2], [rear - 20, 0, T0 + 20], 2.6, DD_CHIP, .8), { at: [rear - 18, 0, T0 + 18] });
+  }
+  if (step('wiring')){
+    const cols = ['#e2483d', '#f4b829', '#3f78d8'];
+    g.motors.forEach(m => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180);
+      cols.forEach((col, k) => { const o = (k - 1)*2.4, ox = -s*o, oy = c*o, rr = g.arm - R - 2;
+        add('wire', ddWire([[rr*c + ox, rr*s + oy, zA1 + .8], [(rr*.5 + 12)*c + ox, (rr*.5 + 12)*s + oy, zA1 + .8]], col, .7), { inner: true });
+        add('wire', ddWire([[(rr*.5 + 12)*c + ox, (rr*.5 + 12)*s + oy, zA1 + .8], [24*c + ox, 24*s + oy, zC + .8], [(bw - 2)*c - 4 + ox, (bw - 2)*s + oy, zE + 1.8]], col, .7), { inner: true }); }); });
+    for (const [s, col] of [[3, '#e2483d'], [-3, '#3a3632']]) add('xt60', ddWire([[-bw - 2, s, zE + 1.8], [rear + 2, s, zE + 1], [rear - 6, s, zE + 4], [rear - 10, s, T0 - 2]], col, 1.5), { inner: true });
+    add('xt60', ddBox(rear - 16, -6, T0 - 4, rear - 4, 6, T0 + 4, matOf('#f4c430'), .8, 1));
+    add('cap', ddRod([rear + 4, 8, zC + 5], [rear - 16, 8, zC + 5], 4.5, matOf('#3b4a6b'), .8), { inner: true });
+    add('wire', ddWire([[L/2 - 21, 0, zC + 10], [bw - 2, 0, zF + 2]], '#8a8a8a', .5), { inner: true });
+  }
+  if (step('shell')){
+    for (const [x, y] of corners) add('standoff', ddCyl(x, y, zC, T0, 2.6, pal || DD_ALU, .7, 10));
+    add('plate', ddPrism(dd2Rect(-L/2, -W/2, L/2, W/2, 10), T0, T0 + 2.5, DD_CARBON, .9, 1.4), { cover: true, at: [L/2 - 12, -W/2 + 5, T0 + 2.5] });
+  }
+  if (step('payload')){
+    // the payload pod, slung under the belly on two rails
+    const body = ddBox(P.x0, -P.hy, P.z0, P.x1, P.hy, P.z1, matOf('#3f4750'), .9, 1.4);
+    const nose = ddSweep(rrUV(-P.hy, P.z0, P.hy, P.z1, 8), P.x1, rrUV(-5, P.z0 + 7, 5, P.z1 - 6, 3), P.x1 + P.nose, DD_SILVER, 1.2);
+    add('payload', { svg: body.svg + nose.svg, pts: [...body.pts, ...nose.pts] }, { cover: true, at: [P.x0 + 14, 0, (P.z0 + P.z1)/2] });
+    // tail fins: two swept wings, one up, one down
+    for (const s of [-1, 1]) add('fin', ddBox(P.x0, s > 0 ? P.hy : -P.hy - 3, P.z0 + 3, P.x0 + 18, s > 0 ? P.hy + 3 : -P.hy, P.z0 + 31, matOf('#c94f3d'), .7, .9));
+    add('fin', ddBox(P.x0, -2.5, P.z1, P.x0 + 16, 2.5, P.z1 + 15, matOf('#c94f3d'), .7, .9));
+    add('fin', ddBox(P.x0, -2.5, P.z0, P.x0 + 16, 2.5, P.z0 + 12, matOf('#c94f3d'), .7, .9));
+    // the rails that hold the pod to the frame
+    for (const s of [-1, 1]) add('standoff', ddRod([P.x0 + 16, s*12, P.z1], [P.x0 + 16, s*12, zB + 1], 2.2, DD_SILVER, .7), { at: [P.x0 + 16, s*12, (P.z1 + zB)/2] });
+  }
+  if (step('battery')){
+    const [bl, bw2, bh] = g.batt, x1 = bl/2, x0 = x1 - bl, z0 = T0 + 2.5;
+    const b = ddBox(x0, -bw2/2, z0, x1, bw2/2, z0 + bh, matOf('#3f9fd8'), 1, 1.8);
+    let svg = b.svg;
+    if (!DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw2/2 + .3 : -bw2/2 - .3;
+      svg += vis([0, sy > 0 ? 1 : -1, 0]) ? ddLabelY((x0 + x1)/2, sy, z0 + bh/2 - 3, g.cells, 9) : ''; }
+    add('battery', { svg, pts: b.pts }, { cover: true, at: [x0 + 6, bw2/2, z0 + bh*.7] });
+    const sx = (x0 + x1)/2;
+    add('strap', ddPrism(dd2Rect(sx - 7, -bw2/2 - 1.2, sx + 7, bw2/2 + 1.2), z0 + bh, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
+    for (const s of [-1, 1]) add('strap', ddBox(sx - 7, s > 0 ? bw2/2 : -bw2/2 - 1.2, z0, sx + 7, s > 0 ? bw2/2 + 1.2 : -bw2/2, z0 + bh + 1.4, pal || matOf('#e2483d'), .7, .9), { cover: true });
+    add('xt60', ddWire([[x0 + 2, 4, z0 + bh*.4], [rear - 10, 4, T0 + 4]], '#e2483d', 1.4));
+    shadow.push(ddXF([x0, -bw2/2, z0 + bh]), ddXF([x1, bw2/2, z0 + bh]));
+  }
+}
+
 /* ---------- style: round centre plates, tube arms, landing gear (octo, hexa) ---------- */
 function ddRound(D, g, st, step, add, shadow){
   const Rp = g.plateR, k = Rp/165, G = g.gearH, pal = PALS[D.pal], tr = 12.5*k, zt = G + 4 + tr, Rm = g.motorR;
@@ -417,9 +522,237 @@ function ddRound(D, g, st, step, add, shadow){
   st.top = G + 200*k;
 }
 
+/* ---------- style: Anduril Bolt (faceted black quad, mission module on the spine) ---------- */
+// the deck heights the whole build hangs off; ddExtent reads the same numbers, so the frame always fits
+const ddBoltZ = { belly: 38, deck: 178, modTop: 258, top: 302 };
+function ddBolt(D, g, st, step, add, shadow){
+  const L = g.plateL, hy = g.plateW/2, R = g.motorR, Z = ddBoltZ, pal = PALS[D.pal];
+  const blk = matOf('#2a2826'), dark = matOf('#1d1b19');    // matte black airframe: the palette only on small details
+  st.zMotor = 130; st.zP = st.zMotor + R*.22 + g.motorH + 1.5; st.top = Z.top;
+  const full = dd2Oct(hy, Z.belly, Z.deck, 30), nose = dd2Oct(hy*.42, Z.belly + 32, Z.deck - 34, 14);
+  if (step('frame')){
+    // two flat rails: it stands on these, so the gimbal under the nose never touches the ground
+    for (const s of [-1, 1]) add('skid', ddBox(-235, s > 0 ? 58 : -80, 0, 235, s > 0 ? 80 : -58, 10, dark, .9, 1.2), { at: [170, 68*s, 10] });
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) add('foot', ddRod([sx*206, sy*70, 8], [sx*196, sy*58, Z.belly], 4.5, DD_CARBON, .8));
+    // the belly plate: the pack, the ESCs and the arm hinges all bolt to it
+    add('plate', ddBox(-L/2 + 14, -hy + 12, Z.belly, L/2 - 14, hy - 12, Z.belly + 9, DD_CARBON, .9, 1.3), { at: [-L/2 + 30, hy - 12, Z.belly + 9] });
+    shadow.push(...[[-206, -60, 0], [206, 60, 0], [206, -60, 0], [-206, 60, 0]].map(ddXF));
+  }
+  if (step('arms')){
+    g.motors.forEach(m => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180);
+      add('arm', ddPrism(dd2Arm(m.a, 74, g.arm, g.armW, 42), 112, 126, blk, .9, 1.3), { at: [g.arm*.62*c, g.arm*.62*s, 126] });
+      // the fold: a vertical pin at the root, so the arm lies back along the body to fit the case
+      add('arm', ddCyl(84*c, 84*s, 104, 134, 11, DD_SILVER, .8, 12));
+      add('arm', ddCyl(g.arm*c, g.arm*s, 126, 132, R*1.35, blk, .9, 16));
+      shadow.push(ddXF([g.arm*c, g.arm*s, 126]));
+    });
+  }
+  if (step('esc')){
+    const esc = ddBox(-96, -48, Z.belly + 16, 58, 48, Z.belly + 18, DD_PCB_E, .8, 1);
+    let svg = esc.svg; for (let i = 0; i < 4; i++) svg += ddBox(-86 + i*26, -32, Z.belly + 18, -72 + i*26, -18, Z.belly + 23, DD_CHIP, .5, .6).svg;
+    add('esc', { svg, pts: esc.pts }, { inner: true, at: [58, 48, Z.belly + 18] });
+  }
+  if (step('fc')){
+    const fc = ddBox(-56, -40, Z.belly + 26, 66, 40, Z.belly + 28, DD_PCB_F, .8, 1);
+    add('fc', { svg: fc.svg + ddBox(-16, -12, Z.belly + 28, 6, 12, Z.belly + 31, DD_CHIP, .5, .6).svg, pts: fc.pts }, { inner: true, at: [66, 40, Z.belly + 28] });
+    add('gyro', ddBox(22, -7, Z.belly + 28, 30, 1, Z.belly + 30, matOf('#d8d8d8'), .5, .6), { inner: true });
+    // the GPS puck and two radio antennas sit on the open deck aft of the module
+    add('gps', ddBox(-266, -17, Z.deck, -228, 17, Z.deck + 9, matOf('#2f3640'), .8, 1), { at: [-247, 17, Z.deck + 9] });
+    for (const s of [-1, 1]) add('antenna', ddRod([-204, 40*s, Z.deck], [-220, 62*s, Z.deck + 44], 2.4, blk, .8), { at: [-220, 62*s, Z.deck + 44] });
+  }
+  const gx = L/2 - 42, gz = 82, gr = 56;
+  if (step('camera')){
+    // the gimbal ball hangs under the nose on a two-cheek yoke, so it can look straight down
+    add('gimbal', ddBall(gx, 0, gz, gr, matOf('#1b1a18')), { at: [gx, 0, gz + gr] });
+    for (const s of [-1, 1]) add('gimbal', ddRod([gx - 34, 40*s, Z.belly + 2], [gx - 4, (gr - 6)*s, gz + 8], 7, DD_SILVER, .8));
+    const lens = ddRod([gx + gr*.5, 0, gz], [gx + gr*.98, 0, gz], 26, matOf('#141312'), .9, 22);
+    const gl = ddRod([gx + gr*.98, 0, gz], [gx + gr*1.02, 0, gz], 17, matOf('#4b6b9a'), .6);
+    add('camera', { svg: lens.svg + gl.svg, pts: lens.pts }, { at: [gx + gr, 0, gz] });
+  }
+  if (step('wiring')){
+    const cols = ['#e2483d', '#f4b829', '#3f78d8'];
+    g.motors.forEach((m, i) => { const c = Math.cos(m.a*Math.PI/180), s = Math.sin(m.a*Math.PI/180);
+      add('wire', ddWire([[g.arm*.45*c, g.arm*.45*s, 126], [84*c, 84*s, 118], [52*c, 52*s, Z.belly + 20]], cols[i % 3], .8), { inner: true }); });
+    add('xt60', ddWire([[58, 26, Z.belly + 18], [110, 34, 60], [120, 40, 96]], '#e2483d', 1.5), { inner: true });
+    add('cap', ddRod([-40, 40, Z.belly + 22], [-58, 40, Z.belly + 22], 5, matOf('#3b4a6b'), .8), { inner: true });
+  }
+  if (step('shell')){
+    // the faceted body: one octagonal section, tapering to a squared nose
+    add('shell', ddSweep(full, -L/2, full, 170, blk, 1.7), { cover: true, at: [0, hy, Z.deck] });
+    add('shell', ddSweep(full, 170, nose, L/2 + 20, blk, 1.4), { cover: true });
+    // the silver heat-sink spine: the avionics under it dump their heat into the airstream
+    add('shell', ddBox(-L/2 + 8, -30, Z.deck, 150, 30, Z.deck + 6, DD_SILVER, .8, 1), { cover: true });
+    for (let i = 0; i < 15; i++){ const x = -L/2 + 16 + i*28;
+      add('shell', ddBox(x, -30, Z.deck + 6, x + 9, 30, Z.deck + 13, DD_SILVER, .6, .8), { cover: true }); }
+    // the carry loop: one hand, so a soldier can lift it out of the case and throw it up
+    for (const x of [126, 158]) add('shell', ddBox(x, -6, Z.deck, x + 7, 6, Z.deck + 32, blk, .7, .9), { cover: true });
+    add('shell', ddBox(126, -6, Z.deck + 32, 165, 6, Z.deck + 38, blk, .7, .9), { cover: true });
+  }
+  if (step('payload')){
+    // the mission module: a latched can on the spine, sensors or warhead, swapped without tools
+    const m0 = -120, m1 = 86, z0 = Z.deck + 12, z1 = Z.modTop, zc = (z0 + z1)/2, hz = (z1 - z0)/2;
+    const prof = k => ellUV(0, zc, hy*.78*k, hz*k, 18);
+    const mod = ddSweep(prof(1), m0, prof(1), m1, dark, 1.5), capA = ddSweep(prof(1), m0, prof(.5), m0 - 26, dark, 1.2),
+          capB = ddSweep(prof(1), m1, prof(.46), m1 + 30, pal, 1.2);   // the one accent: a painted nose on the can
+    add('module', { svg: mod.svg + capA.svg + capB.svg, pts: [...mod.pts, ...capA.pts, ...capB.pts] }, { at: [m0 + 24, 0, z1 + 6] });
+    for (let i = 0; i < 7; i++){ const x = m0 + 18 + i*28;   // heat-sink strips on the can's top
+      add('module', ddBox(x, -38, z1 - 5, x + 9, 38, z1 + 3, DD_SILVER, .6, .8)); }
+    for (const s of [-1, 1]) add('module', ddBox(-10, s > 0 ? hy*.76 : -hy*.79, zc - 8, 34, s > 0 ? hy*.79 : -hy*.76, zc + 8, DD_SILVER, .7, .9));
+  }
+  if (step('battery')){
+    const [bl, bw, bh] = g.batt, z0 = Z.belly + 6;
+    // the pack sits low and aft in the belly: out of the way of the gimbal, right over the centre of mass
+    const b = ddBox(-bl + 5, -bw/2, z0, 5, bw/2, z0 + bh, matOf('#2f6f8f'), 1, 1.7);
+    let svg = b.svg;
+    if (!DD_T.r && !DD_T.p && !DD_T.y){ const sy = vis([0, 1, 0]) ? bw/2 + .3 : -bw/2 - .3;
+      svg += vis([0, sy > 0 ? 1 : -1, 0]) ? ddLabelY(-bl/2 + 5, sy, z0 + bh/2 - 3, g.cells, 9) : ''; }
+    add('battery', { svg, pts: b.pts }, { inner: true, at: [-bl + 12, bw/2, z0 + bh*.7] });
+    for (const sx of [-bl + 40, -bl + 110]) add('strap', ddBox(sx - 7, -bw/2 - 1.6, z0 + bh, sx + 7, bw/2 + 1.6, z0 + bh + 1.8, pal, .7, .9), { cover: true });
+    add('xt60', ddWire([[5, 10, z0 + bh*.5], [60, 20, 70], [100, 30, Z.belly + 18]], '#8a3a30', 1.4), { inner: true });
+    shadow.push(ddXF([-bl + 5, -bw/2, z0 + bh]), ddXF([5, bw/2, z0 + bh]));
+  }
+}
+
+/* ---------- style: Anduril Ghost-X (one main rotor on a mast, tail boom, skids) ---------- */
+function ddHeli(D, g, st, step, add, shadow){
+  const blk = matOf('#26241f'), dark = matOf('#1b1a18'), pal = PALS[D.pal];
+  const zB = 320, zD = 640;                                  // belly and deck of the moulded body
+  st.zMotor = 700; st.zP = 812; st.top = 860;                // the generic pass puts the head can and the blades here
+  const body = dd2Oct(210, zB, zD, 44), nose = dd2Oct(122, zB + 44, zD - 96, 32);
+  if (step('frame')){
+    // two wide rails: a 25 kg machine lands hard, and the chin sensor needs clearance
+    for (const s of [-1, 1]){
+      add('skid', ddBox(-600, s > 0 ? 288 : -306, 0, 500, s > 0 ? 306 : -288, 22, blk, .9, 1.3), { at: [440, 300*s, 22] });
+      for (const x of [-380, 300]) add('skid', ddRod([x, 296*s, 20], [x*.88, 176*s, zB], 9, blk, .9), { at: [x*.94, 236*s, (22 + zB)/2] });
+      shadow.push(ddXF([-520, 296*s, 0]), ddXF([430, 296*s, 0]));
+    }
+    // the keel: body, payload rail and mast all bolt to this beam
+    add('plate', ddBox(-840, -130, zB - 24, 700, 130, zB, DD_CARBON, .9, 1.3), { at: [-820, 130, zB] });
+    for (const x of [-640, -120, 400]) add('plate', ddBox(x, -206, zB - 2, x + 22, 206, zB + 20, DD_CARBON, .8, 1));
+  }
+  if (step('boom')){
+    // the boom tapers aft and carries the tail drive shaft inside it
+    add('boom', ddRod([-620, 0, 470], [-2350, 0, 470], 76, blk, 1.2, 46, 18), { at: [-1500, 0, 546] });
+    add('boom', ddRod([-660, 0, 470], [-2260, 0, 470], 13, DD_SILVER, .6, 9, 12), { inner: true });
+    // the fin: a slab the tail gearbox and rotor hang on, with a painted tip for the crew to see
+    add('boom', ddSlab([[-2354, 336], [-2286, 336], [-2286, 690], [-2312, 806], [-2354, 762]], -13, 13, blk), { at: [-2322, 13, 720] });
+    add('boom', ddSlab([[-2318, 756], [-2350, 748], [-2350, 762], [-2312, 806]], 13, 18, pal, .6));
+    // the tail skid: it keeps the boom off the ground when the machine sits tail-down
+    add('gear', ddRod([-2140, 0, 430], [-2140, 0, 14], 9, blk, .9), { at: [-2140, 0, 180] });
+    add('skid', ddBox(-2192, -42, 0, -2088, 42, 14, DD_RUBBER, .8, 1));
+    shadow.push(ddXF([-2140, 0, 0]));
+  }
+  if (step('motors')){
+    // engine and gearbox under the deck; the mast comes up through the roof
+    add('engine', ddBox(-250, -145, 372, 250, 145, 600, matOf('#3a3833'), .9, 1.4), { inner: true, at: [250, 145, 470] });
+    add('engine', ddBox(-236, -155, 560, 236, 155, 606, matOf('#232120'), .8, 1));
+    add('mast', ddRod([0, 0, 588], [0, 0, 708], 26, DD_SILVER, 1, 22, 16), { at: [0, 26, 650] });
+    for (const s of [-1, 1]) add('engine', ddRod([-150, 118*s, 620], [-250, 132*s, 700], 18, dark, .9, 14), { at: [-250, 132*s, 700] });
+  }
+  if (step('esc')){
+    const esc = ddBox(-240, -100, 342, 10, 100, 354, DD_PCB_E, .8, 1);
+    let svg = esc.svg; for (let i = 0; i < 5; i++) svg += ddBox(-222 + i*42, -82, 354, -200 + i*42, 82, 362, DD_CHIP, .5, .6).svg;
+    add('esc', { svg, pts: esc.pts }, { inner: true, at: [10, 100, 354] });
+  }
+  if (step('fc')){
+    const fc = ddBox(-320, -85, 430, -60, 85, 442, DD_PCB_F, .8, 1.2);
+    add('fc', { svg: fc.svg + ddBox(-220, -40, 442, -160, 40, 450, DD_CHIP, .5, .6).svg, pts: fc.pts }, { inner: true, at: [-60, 85, 442] });
+    add('gyro', ddBox(-120, -20, 442, -100, 0, 446, matOf('#d8d8d8'), .5, .6), { inner: true });
+    // GPS on the nose deck, a stub behind the mast and a whip on the boom
+    add('gps', ddBox(420, -58, zD - 4, 540, 58, zD + 8, matOf('#2f3640'), .9, 1.2), { at: [480, 58, zD + 8] });
+    add('antenna', ddRod([-80, 0, zD - 4], [-80, 0, zD + 72], 5, blk, .8), { at: [-80, 0, zD + 70] });
+    add('antenna', ddRod([-1500, 64, 500], [-1760, 74, 330], 3.5, blk, .8), { at: [-1760, 74, 322] });
+  }
+  const gx = 760, gz = 240, gr = 185;
+  if (step('camera')){
+    // the sensor ball hangs under the nose on a two-arm fork: it can point straight down
+    add('gimbal', ddBall(gx, 0, gz, gr, matOf('#191817')), { at: [gx, 0, gz + gr] });
+    for (const s of [-1, 1]) add('gimbal', ddRod([gx - 70, 96*s, zB + 20], [gx - 6, (gr - 6)*s, gz + 30], 15, blk, .9));
+    const lens = ddRod([gx + gr*.48, 0, gz], [gx + gr*.99, 0, gz], 54, matOf('#121110'), 1, 46);
+    const gl = ddRod([gx + gr*.99, 0, gz], [gx + gr*1.03, 0, gz], 37, matOf('#4b6b9a'), .7);
+    add('camera', { svg: lens.svg + gl.svg, pts: lens.pts }, { at: [gx + gr, 0, gz] });
+  }
+  if (step('wiring')){
+    // inside an opaque body: keep the runs dark, so a part caught by the depth sort reads as a shadow, not a cable
+    for (const s of [-1, 1]) add('xt60', ddWire([[40, 110*s, 400], [160, 150*s, 372], [300, 110*s, 356]], s > 0 ? '#7d332c' : '#2e2b28', 1.5), { inner: true });
+    add('wire', ddWire([[250, 0, 390], [420, 0, 430], [640, 0, 500]], '#5a5a5a', .7), { inner: true });
+    add('wire', ddWire([[0, 0, 340], [0, 60, 372], [60, 90, 470]], '#5a5348', .7), { inner: true });
+  }
+  if (step('shell')){
+    // the moulded body: slab sides, a squared nose and a cowling hump behind the mast
+    add('shell', ddSweep(body, -900, body, 620, blk, 1.9), { cover: true, at: [0, 210, 600] });
+    add('shell', ddSweep(body, 620, nose, 900, blk, 1.5), { cover: true, at: [770, 150, 470] });
+    add('shell', ddSweep(dd2Oct(150, zD - 8, zD + 66, 26), -600, dd2Oct(118, zD - 8, zD + 54, 22), -90, blk, 1.3), { cover: true, at: [-300, 150, zD + 66] });
+    // the hatch panels the crew opens to reach the packs and the avionics
+    for (const s of [-1, 1]) add('hatch', ddBox(-330, s > 0 ? 208 : -212, 360, 140, s > 0 ? 212 : -208, 560, matOf('#302e2a'), .7, 1), { cover: true });
+  }
+  if (step('payload')){
+    // the bay: it hangs on two rails under the keel, so a crew can swap it in minutes
+    add('bay', ddBox(-310, -160, 110, 310, 160, 296, matOf('#33302b'), 1, 1.6), { at: [310, 160, 200] });
+    for (const s of [-1, 1]) add('bay', ddBox(-326, s > 0 ? 118 : -142, 292, 326, s > 0 ? 142 : -118, 306, DD_ALU, .8, 1));
+    for (const x of [-250, 250]) for (const s of [-1, 1]) add('bay', ddCyl(x, 150*s, 300, 322, 9, DD_SILVER, .7, 10));
+    // the sensor window in the bay's chin
+    add('bay', ddBox(-110, -96, 104, 130, 96, 112, matOf('#2b3a44'), .8, 1));
+    add('camera', ddBox(-96, -74, 96, 116, 74, 106, matOf('#3d5a70'), .7, 1), { at: [116, 74, 101] });
+    shadow.push(ddXF([-310, -160, 0]), ddXF([310, 160, 0]));
+  }
+  if (step('battery')){
+    for (const s of [-1, 1]){
+      // packs in dark cases: they live inside the body, so nothing bright should read through the skin
+      add('battery', ddBox(-350, s > 0 ? 40 : -200, 336, 150, s > 0 ? 200 : -40, 470, matOf('#39434b'), 1, 1.8), { inner: true, at: [150, 200*s, 400] });
+      add('strap', ddBox(-70, s > 0 ? 34 : -206, 468, -54, s > 0 ? 206 : -34, 476, matOf('#2a2e33'), .7, .9), { cover: true });
+    }
+  }
+  if (step('rotor')){
+    // swashplate and pitch links: the two controls that reach the spinning blades
+    add('rotor', ddCyl(0, 0, 660, 676, 74, DD_SILVER, .9, 18), { at: [74, 0, 668] });
+    for (const s of [-1, 1]) add('rotor', ddRod([-34, 66*s, 676], [-14, 92*s, 700], 7, DD_SILVER, .8));
+    // the blades: ddProp, so the blur disc and the spin arrows come from the same kit as every other prop.
+    // chord .42: a rotor blade is far more slender than a quad prop, and at full size it would hide the body
+    add('rotor', ddProp(0, 0, st.zP, g.rotorR, g.blades, 1, g.propCol, (st.spin || 0) + 18, st.speed || 0, .42), { at: [g.rotorR*.62, 0, st.zP + 2] });
+    // the tail rotor: blades in a vertical plane, turning about the boom axis. The gearbox and shaft are
+    // part of it, so the hub never looks like it floats beside the fin
+    add('tailrotor', ddBox(-2342, 14, 528, -2284, 62, 596, blk, .8, 1));
+    add('tailrotor', ddRod([-2315, 50, 560], [-2315, 118, 560], 22, dark, .8, 20));
+    add('tailrotor', ddTailRotor(-2315, 130, 560, g.tailR, g.tailBlades, (st.spin || 0) + 55, g.propCol, st.speed || 0), { at: [-2315, 130, 560 + g.tailR] });
+    if (st.arrows) add('tailrotor', ddTailArc(-2315, 130, 560, g.tailR, 200));
+  }
+}
+// a rotor in a vertical plane (normal y): the blades sweep x-z, so it reads as a tail rotor and not a prop
+function ddTailRotor(cx, cy, cz, R, blades, ang, col, speed){
+  const M = matOf(col), blur = Math.min(1, (speed || 0)*1.6), pts = [];
+  let s = '';
+  if (blur > .05){ const ring = Array.from({ length: 24 }, (_, i) => { const a = i/24*2*Math.PI;
+      return ddXF([cx + R*Math.cos(a), cy + 2, cz + R*Math.sin(a)]); });
+    s += fill(pd(ring), col, `opacity="${f(.26*blur)}"`); pts.push(...ring); }
+  for (let b = 0; b < blades; b++){
+    const th = ang*Math.PI/180 + b*2*Math.PI/blades, c = Math.cos(th), sn = Math.sin(th);
+    // w runs along the chord (tangential, so the blade has width), dy is its pitch
+    const Q = (r, w, dy) => ddXF([cx + r*c - w*sn, cy + dy, cz + r*sn + w*c]);
+    const q = [Q(26, 20, 5), Q(R*.6, 30, 4), Q(R, 13, 1), Q(R, -10, -1), Q(R*.6, -22, -1), Q(26, -12, -1)];
+    let n = ddNormal(q); if (!vis(n)) n = n.map(v => -v);
+    s += `<g opacity="${f(1 - .7*blur)}">` + shape(q, toneI(n, M), .8) + '</g>'; pts.push(...q);
+  }
+  const hub = ddRod([cx, cy - 15, cz], [cx, cy + 15, cz], 20, M, .8, 20, 12);
+  return { svg: s + hub.svg, pts: [...pts, ...hub.pts, ...ellUV(cx, cz, R, R, 8).map(([u, v]) => ddXF([u, cy, v]))] };
+}
+// the spin arrow for it, in the same vertical plane
+function ddTailArc(cx, cy, cz, R, a0deg){
+  const r = R*.66, n = 9, a0 = a0deg*Math.PI/180, sw = -2.1, col = DD_CW;
+  const arc = Array.from({ length: n + 1 }, (_, i) => { const a = a0 + sw*i/n; return ddXF([cx + r*Math.cos(a), cy + 4, cz + r*Math.sin(a)]); });
+  const ae = a0 + sw, end = [cx + r*Math.cos(ae), cy + 4, cz + r*Math.sin(ae)], tg = [Math.sin(ae), 0, -Math.cos(ae)];
+  const tip = ddXF([end[0] + tg[0]*R*.15, end[1], end[2] + tg[2]*R*.15]), rad = [Math.cos(ae), 0, Math.sin(ae)], w = R*.085;
+  const head = [tip, ddXF([end[0] + rad[0]*w, end[1], end[2] + rad[2]*w]), ddXF([end[0] - rad[0]*w, end[1], end[2] - rad[2]*w])];
+  const d = pd(arc, false);
+  return { svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>` + shape(head, col, 1.1), pts: [...arc, ...head] };
+}
+
 /* ---------- extents (for framing and the build mat) ---------- */
 function ddExtent(D){
   const g = D.geo;
+  if (g.style === 'strike'){ const L = ddStrikeLayout(g); return { r: g.arm + g.propR, h: L.T0 + g.batt[2] + 16 }; }
+  if (g.style === 'bolt') return { r: g.arm + g.propR, h: ddBoltZ.top + 20 };
+  if (g.style === 'heli') return { r: g.rotorR + 60, h: 860 };
   const r = g.style === 'shell' ? 160 : g.arm + (g.style === 'duct' ? g.ductR + 3 : g.propR);
   const h = g.style === 'round' ? g.gearH + 200*g.plateR/165 : g.style === 'shell' ? 70 : g.style === 'duct' ? (g.whoop ? 32 : 62) : 12 + g.standH + (g.action ? 56 : g.batt[2] + 6);
   return { r, h };
